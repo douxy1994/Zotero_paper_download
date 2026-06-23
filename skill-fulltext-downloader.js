@@ -51,6 +51,8 @@ var SkillFulltextDownloader = {
     try { win.MozXULElement.insertFTLIfNeeded("skill-fulltext-downloader.ftl"); } catch (e) {}
   },
 
+  // ===== Progress Dialog =====
+
   _doAll: function (items) {
     var self = this;
     self.isRunning = true;
@@ -58,8 +60,7 @@ var SkillFulltextDownloader = {
 
     var win = Zotero.getMainWindow();
     self.dialog = win.openDialog(
-      "about:blank",
-      "skill-fulltext-dialog",
+      "about:blank", "skill-fulltext-dialog",
       "chrome,centerscreen,resizable=yes,width=520,height=420,modal=no,dependent=no"
     );
 
@@ -67,7 +68,6 @@ var SkillFulltextDownloader = {
       self._buildDialog(self.dialog, items);
       self._process(items, 0);
     });
-
     if (self.dialog.document.readyState === "complete") {
       self._buildDialog(self.dialog, items);
       self._process(items, 0);
@@ -76,131 +76,90 @@ var SkillFulltextDownloader = {
 
   _buildDialog: function (dlg, items) {
     var doc = dlg.document;
-
-    // 使用 XHTML 命名空间，确保背景色生效
     doc.documentElement.setAttribute("xmlns", "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul");
-
-    // 写入完整的 XUL 文档，使用系统主题色
     doc.documentElement.innerHTML = "";
 
-    // 创建 stylesheet 跟随系统深色/浅色
     var styleEl = doc.createElement("style");
-    styleEl.textContent = `
-      :root {
-        --bg: -moz-Dialog;
-        --fg: -moz-DialogText;
-        --border: ThreeDShadow;
-        --item-bg: -moz-Field;
-        --item-fg: -moz-FieldText;
-      }
-      @media (prefers-color-scheme: dark) {
-        :root {
-          --bg: #2d2d2d;
-          --fg: #e0e0e0;
-          --border: #555;
-          --item-bg: #1e1e1e;
-          --item-fg: #e0e0e0;
-        }
-      }
-    `;
+    styleEl.textContent = [
+      ":root { --bg: -moz-Dialog; --fg: -moz-DialogText; --border: ThreeDShadow; --item-bg: -moz-Field; --item-fg: -moz-FieldText; }",
+      "@media (prefers-color-scheme: dark) { :root { --bg: #2d2d2d; --fg: #e0e0e0; --border: #555; --item-bg: #1e1e1e; --item-fg: #e0e0e0; } }"
+    ].join("\n");
     doc.documentElement.appendChild(styleEl);
 
+    var self = this;
     var vbox = doc.createXULElement("vbox");
-    vbox.setAttribute("style",
-      "padding:16px;font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:13px;" +
-      "background:var(--bg);color:var(--fg);height:100%;box-sizing:border-box;");
+    vbox.setAttribute("style", "padding:16px;font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:13px;background:var(--bg);color:var(--fg);height:100%;box-sizing:border-box;");
 
-    // 标题
     var titleEl = doc.createXULElement("label");
-    titleEl.setAttribute("value", "Skill 下载全文");
+    titleEl.setAttribute("value", "Skill \u4E0B\u8F7D\u5168\u6587");
     titleEl.setAttribute("style", "font-size:16px;font-weight:bold;margin-bottom:12px;");
     vbox.appendChild(titleEl);
 
-    // 进度条行
     var progRow = doc.createXULElement("hbox");
     progRow.setAttribute("style", "margin-bottom:8px;align-items:center;gap:8px;");
-
     var progressbar = doc.createXULElement("progressmeter");
     progressbar.setAttribute("id", "sf-progress");
     progressbar.setAttribute("mode", "determined");
     progressbar.setAttribute("value", "0");
     progressbar.setAttribute("style", "flex:1;height:22px;");
     progRow.appendChild(progressbar);
-
     var progressLabel = doc.createXULElement("label");
     progressLabel.setAttribute("id", "sf-progress-label");
     progressLabel.setAttribute("value", "0 / " + items.length);
     progressLabel.setAttribute("style", "min-width:60px;");
     progRow.appendChild(progressLabel);
-
     vbox.appendChild(progRow);
 
-    // 当前状态
-    var statusLabel = doc.createXULElement("label");
+    var statusLabel = doc.createXULEment ? doc.createXULElement("label") : doc.createElement("label");
     statusLabel.setAttribute("id", "sf-status");
-    statusLabel.setAttribute("value", "准备下载...");
+    statusLabel.setAttribute("value", "\u51C6\u5907\u4E0B\u8F7D...");
     statusLabel.setAttribute("style", "margin-bottom:8px;opacity:0.7;");
     vbox.appendChild(statusLabel);
 
-    // 列表容器 - 有背景色和边框
     var listbox = doc.createXULElement("vbox");
     listbox.setAttribute("id", "sf-list");
-    listbox.setAttribute("style",
-      "flex:1;overflow-y:auto;" +
-      "border:1px solid var(--border);border-radius:4px;" +
-      "background:var(--item-bg);color:var(--item-fg);padding:4px;");
+    listbox.setAttribute("style", "flex:1;overflow-y:auto;border:1px solid var(--border);border-radius:4px;background:var(--item-bg);color:var(--item-fg);padding:4px;");
 
     for (var i = 0; i < items.length; i++) {
       var row = doc.createXULElement("hbox");
       row.setAttribute("id", "sf-item-" + i);
       row.setAttribute("style", "padding:6px 8px;border-bottom:1px solid rgba(128,128,128,0.2);align-items:center;gap:8px;");
-
       var icon = doc.createXULElement("label");
       icon.setAttribute("id", "sf-icon-" + i);
       icon.setAttribute("value", "\u23F3");
       icon.setAttribute("style", "min-width:20px;text-align:center;font-size:14px;");
       row.appendChild(icon);
-
       var itemTitle = items[i].getField("title") || "Unknown";
       if (itemTitle.length > 45) itemTitle = itemTitle.slice(0, 45) + "...";
-
       var label = doc.createXULElement("label");
       label.setAttribute("value", itemTitle);
       label.setAttribute("style", "flex:1;overflow:hidden;");
       label.setAttribute("crop", "end");
       label.setAttribute("tooltiptext", items[i].getField("title") || "");
       row.appendChild(label);
-
       var status = doc.createXULElement("label");
       status.setAttribute("id", "sf-status-" + i);
       status.setAttribute("value", "\u7B49\u5F85\u4E2D");
       status.setAttribute("style", "font-size:11px;opacity:0.6;min-width:50px;");
       row.appendChild(status);
-
       listbox.appendChild(row);
     }
-
     vbox.appendChild(listbox);
 
-    // 按钮行
     var btnRow = doc.createXULElement("hbox");
     btnRow.setAttribute("style", "margin-top:12px;justify-content:flex-end;gap:8px;");
-
     var cancelBtn = doc.createXULElement("button");
     cancelBtn.setAttribute("id", "sf-cancel");
     cancelBtn.setAttribute("label", "\u53D6\u6D88");
     cancelBtn.addEventListener("command", function () { self._cancel(); });
     btnRow.appendChild(cancelBtn);
-
     var closeBtn = doc.createXULElement("button");
     closeBtn.setAttribute("id", "sf-close");
     closeBtn.setAttribute("label", "\u5173\u95ED");
     closeBtn.setAttribute("disabled", "true");
     closeBtn.addEventListener("command", function () { dlg.close(); });
     btnRow.appendChild(closeBtn);
-
     vbox.appendChild(btnRow);
-
     doc.documentElement.appendChild(vbox);
   },
 
@@ -218,7 +177,6 @@ var SkillFulltextDownloader = {
     var icon = dlg.document.getElementById("sf-icon-" + i);
     var status = dlg.document.getElementById("sf-status-" + i);
     if (!icon || !status) return;
-
     if (state === "downloading") {
       icon.setAttribute("value", "\uD83D\uDD04");
       status.setAttribute("value", "\u4E0B\u8F7D\u4E2D");
@@ -264,10 +222,8 @@ var SkillFulltextDownloader = {
       self._finishDialog();
       return;
     }
-
     self._updateItem(i, "downloading");
     self._updateProgress(i, items.length);
-
     self._one(items[i]).then(function () {
       self._updateItem(i, "success");
       self._process(items, i + 1);
@@ -276,6 +232,8 @@ var SkillFulltextDownloader = {
       self._process(items, i + 1);
     });
   },
+
+  // ===== Download Logic =====
 
   _one: function (item) {
     var query = (item.getField("DOI") || "").trim()
@@ -296,7 +254,6 @@ var SkillFulltextDownloader = {
       return self._pickAttachmentFile(workDir);
     }).then(function (file) {
       if (!file) {
-        // 读取 stderr 获取详细原因
         return IOUtils.exists(stderrLog).then(function (ex) {
           if (ex) return IOUtils.readUTF8(stderrLog);
           return "";
@@ -308,9 +265,7 @@ var SkillFulltextDownloader = {
               if (payload.status === "ambiguous") detail = "\u6807\u9898\u6B67\u4E49\uFF0C\u8BF7\u8865\u5145DOI";
               else if (payload.reason) detail = payload.reason.slice(0, 80);
               else detail = se.slice(0, 80);
-            } catch (e) {
-              detail = se.slice(0, 80);
-            }
+            } catch (e) { detail = se.slice(0, 80); }
           }
           throw new Error("\u672A\u751F\u6210\u6587\u4EF6" + (detail ? ": " + detail : ""));
         });
@@ -318,9 +273,7 @@ var SkillFulltextDownloader = {
       var contentType = file.toLowerCase().endsWith(".pdf") ? "application/pdf" : "text/markdown";
       var title = contentType === "application/pdf" ? "Skill \u4E0B\u8F7D\u5168\u6587" : "Skill \u4E0B\u8F7D\u5168\u6587 (Markdown)";
       return Zotero.Attachments.importFromFile({
-        file: file,
-        parentItemID: item.id,
-        title: title,
+        file: file, parentItemID: item.id, title: title,
         fileBaseName: Zotero.Attachments.getFileBaseNameFromItem(item, { attachmentTitle: title }),
         contentType: contentType
       });
@@ -328,22 +281,58 @@ var SkillFulltextDownloader = {
   },
 
   _runPaperFetch: function (query, outputDir, resultJSON, stdoutLog, stderrLog) {
-    var script = [
+    var self = this;
+
+    // Step 1: Full mode (may get PDF via browser), 120s timeout
+    var fullScript = [
       "set -euo pipefail",
       "export PATH=\"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/opt/local/bin:$PATH\"",
-      "PAPER_FETCH_BIN=\"/opt/homebrew/bin/paper-fetch\"",
-      "if [ ! -x \"$PAPER_FETCH_BIN\" ]; then PAPER_FETCH_BIN=\"$(command -v paper-fetch || true)\"; fi",
-      "if [ -z \"$PAPER_FETCH_BIN\" ]; then echo \"paper-fetch CLI not found\" >&2; exit 127; fi",
-      "\"$PAPER_FETCH_BIN\" --query \"$1\" --format json --output \"$3\" --output-dir \"$2\" --save-markdown >\"$4\" 2>\"$5\""
+      "BIN=\"/opt/homebrew/bin/paper-fetch\"",
+      "if [ ! -x \"$BIN\" ]; then BIN=\"$(command -v paper-fetch || true)\"; fi",
+      "if [ -z \"$BIN\" ]; then echo \"paper-fetch CLI not found\" >&2; exit 127; fi",
+      "\"$BIN\" --query \"$1\" --format json --output \"$3\" --output-dir \"$2\" --save-markdown --artifact-mode markdown-assets --asset-profile body >\"$4\" 2>\"$5\""
     ].join("\n");
 
-    return this._runProcess("/bin/zsh", [
-      "-lc", script, "skill-fulltext-zotero",
+    // Step 2: Fallback (no browser, Markdown only), 60s timeout
+    var fallbackScript = [
+      "set -euo pipefail",
+      "export PATH=\"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/opt/local/bin:$PATH\"",
+      "BIN=\"/opt/homebrew/bin/paper-fetch\"",
+      "if [ ! -x \"$BIN\" ]; then BIN=\"$(command -v paper-fetch || true)\"; fi",
+      "\"$BIN\" --query \"$1\" --format json --output \"$3\" --output-dir \"$2\" --save-markdown --artifact-mode none >\"$4\" 2>\"$5\""
+    ].join("\n");
+
+    return self._runProcess("/bin/zsh", [
+      "-lc", fullScript, "skill-fulltext-zotero",
       query, outputDir, resultJSON, stdoutLog, stderrLog
-    ]);
+    ], 120000).then(function () {
+      return self._hasFile(outputDir);
+    }).then(function (hasFile) {
+      if (hasFile) return true;
+      throw new Error("\u5B8C\u6574\u6A21\u5F0F\u672A\u751F\u6210\u6587\u4EF6");
+    }, function (fullErr) {
+      // Fallback: no-browser mode
+      return self._runProcess("/bin/zsh", [
+        "-lc", fallbackScript, "skill-fulltext-zotero",
+        query, outputDir, resultJSON, stdoutLog, stderrLog
+      ], 60000).then(function () {
+        return self._hasFile(outputDir);
+      }).then(function (hasFile) {
+        if (hasFile) return true;
+        throw new Error(fullErr.message);
+      });
+    });
   },
 
-  _runProcess: function (command, args) {
+  _hasFile: async function (dir) {
+    var files = await this._listFilesRecursive(dir);
+    return files.some(function (f) {
+      var lo = f.toLowerCase();
+      return lo.endsWith(".pdf") || lo.endsWith(".md");
+    });
+  },
+
+  _runProcess: function (command, args, timeout) {
     var file = Zotero.File.pathToFile(command);
     if (!file.exists() || !file.isExecutable()) {
       throw new Error(command + " \u4E0D\u5B58\u5728\u6216\u4E0D\u53EF\u6267\u884C");
@@ -367,14 +356,14 @@ var SkillFulltextDownloader = {
       }
     });
 
-    // 5 分钟超时（paper-fetch 下载可能很慢）
+    var ms = timeout || 300000;
     setTimeout(function () {
       if (!finished) {
         finished = true;
         try { process.kill(); } catch (e) {}
-        deferred.reject(new Error("\u4E0B\u8F7D\u8D85\u65F6 (5\u5206\u949F)"));
+        deferred.reject(new Error("\u4E0B\u8F7D\u8D85\u65F6 (" + Math.round(ms / 1000) + "\u79D2)"));
       }
-    }, 300000);
+    }, ms);
 
     return deferred.promise;
   },

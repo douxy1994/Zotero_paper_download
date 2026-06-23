@@ -1,25 +1,17 @@
 # Skill Fulltext Downloader for Zotero
 
-将 [paper-fetch-skill](https://github.com/Dictation354/paper-fetch-skill) 的论文全文抓取能力集成到 Zotero，实现一键下载全文并自动导入为题录附件。
+将 [paperfetch](https://github.com/douxy1994/paperfetch) 的论文全文抓取能力集成到 Zotero，实现一键下载全文并自动导入为题录附件。
 
 ## ✨ 功能特性
 
-- **右键菜单集成**：在 Zotero 题录列表中右键即可看到「skill下载全文」菜单项
-- **批量下载**：支持同时选中多个题录批量下载，带进度弹窗
-- **进度弹窗**：居中弹窗显示下载进度，包含进度条、每条题录状态（等待中 / 下载中 / 完成 / 失败）、可取消
+- **右键菜单集成**：在 Zotero 题录列表中右键即可看到「skill下载全文」菜单项，带图标
+- **批量下载**：支持同时选中多个题录批量下载
+- **进度弹窗**：居中弹窗显示下载进度，包含进度条、每条题录状态（⏳等待 / 🔄下载中 / ✅完成 / ❌失败）、可取消
 - **自动导入附件**：下载完成后自动将 PDF（优先）或 Markdown 全文导入为对应题录的子附件
 - **智能查询**：按 DOI → URL → 标题 的优先级构造查询
+- **两步降级策略**：先尝试完整模式（含浏览器，可能拿到 PDF），失败后自动降级到无浏览器模式（快速拿 Markdown）
 - **深色模式**：弹窗跟随系统主题自动切换深色/浅色
 - **中英双语**：菜单和界面支持中文和英文
-
-## 📸 截图
-
-弹窗包含：
-- 标题栏：「Skill 下载全文」
-- 进度条 + 计数（如 `2 / 6`）
-- 当前状态文字
-- 题录列表：每行显示 ⏳/🔄/✅/❌ 图标 + 题录标题 + 状态标签
-- 底部按钮：取消 / 关闭
 
 ## 🔧 系统要求
 
@@ -31,11 +23,17 @@
 
 ### 安装 paper-fetch
 
+**离线安装（推荐）：**
+
+从 [paperfetch Releases](https://github.com/douxy1994/paperfetch/releases) 下载对应平台的安装包。
+
+**在线安装：**
+
 ```bash
 pip install paper-fetch
 ```
 
-详见 [paper-fetch-skill](https://github.com/Dictation354/paper-fetch-skill)。
+详见 [paperfetch](https://github.com/douxy1994/paperfetch) 文档。
 
 ## 📥 安装插件
 
@@ -72,14 +70,23 @@ zip -r skill-fulltext-zotero.xpi . -x "*.DS_Store" "*.git*"
 2. **URL**（题录的 URL 字段）
 3. **标题**（最后手段，可能产生歧义）
 
+### 下载策略
+
+插件采用两步降级策略：
+
+| 步骤 | 模式 | 超时 | 说明 |
+|------|------|------|------|
+| 1 | 完整模式 (`--artifact-mode markdown-assets --asset-profile body`) | 120秒 | 尝试通过浏览器获取 PDF 和正文图片资源 |
+| 2 | 降级模式 (`--artifact-mode none`) | 60秒 | 跳过浏览器，快速获取 Markdown 全文 |
+
 ### 下载结果
 
 | 文件类型 | 说明 |
 |----------|------|
-| PDF | 优先导入（当 paper-fetch 获取到 PDF 时） |
+| PDF | 优先导入（当浏览器链路成功时） |
 | Markdown | 备选导入（paper-fetch 的 AI 友好 Markdown 全文） |
 
-> **注意**：paper-fetch 能否获取全文取决于论文的开放获取状态。开放获取论文（如 MDPI、arXiv）通常能成功下载；付费墙论文可能只能获取摘要或元数据。
+> **注意**：paper-fetch 能否获取全文取决于论文的开放获取状态和 provider 配置。开放获取论文（如 MDPI、arXiv）通常能成功下载；付费墙论文可能只能获取摘要或元数据。浏览器链路（Playwright/CDP）的稳定性可能影响 PDF 获取。
 
 ## 🏗️ 项目结构
 
@@ -120,24 +127,38 @@ Zotero_paper_download/
 逐条处理：
   1. 提取 DOI/URL/标题
   2. 创建临时目录
-  3. 调用 paper-fetch CLI
-  4. 查找生成的 PDF/Markdown
-  5. 导入为 Zotero 附件
-  6. 更新弹窗状态
+  3. 调用 paper-fetch CLI（完整模式，120s 超时）
+  4. 如果完整模式失败 → 降级到无浏览器模式（60s 超时）
+  5. 查找生成的 PDF/Markdown（优先 PDF）
+  6. 导入为 Zotero 附件
+  7. 更新弹窗状态
     ↓
 全部完成 → 启用「关闭」按钮
 ```
 
+### paper-fetch CLI 参数
+
+| 参数 | 完整模式 | 降级模式 |
+|------|----------|----------|
+| `--format` | json | json |
+| `--output` | result.json | result.json |
+| `--output-dir` | 工作目录 | 工作目录 |
+| `--save-markdown` | ✅ | ✅ |
+| `--artifact-mode` | markdown-assets | none |
+| `--asset-profile` | body | - |
+
 ## 📋 已知限制
 
-1. **付费墙论文**：paper-fetch 无法绕过付费墙，只能获取开放获取的全文
+1. **付费墙论文**：paper-fetch 不绕过付费墙，只能获取开放获取的全文
 2. **标题歧义**：没有 DOI 的题录用标题查询时，paper-fetch 可能返回多个候选导致失败
-3. **下载超时**：单篇论文下载超过 5 分钟会自动取消
+3. **浏览器链路**：Playwright/CDP 的 EPIPE 兼容性问题可能导致 PDF 获取失败，此时自动降级为 Markdown
 4. **macOS 专用**：当前使用 `/bin/zsh` 执行命令，Windows/Linux 需要适配
 
 ## 🙏 致谢
 
-本插件的核心下载能力完全来自 [paper-fetch-skill](https://github.com/Dictation354/paper-fetch-skill)（作者：[@Dictation354](https://github.com/Dictation354)）。本插件仅负责 Zotero 右键菜单集成、进度显示和附件导入，不复制或重新实现任何下载逻辑。
+本插件的核心下载能力完全来自 [paperfetch](https://github.com/douxy1994/paperfetch)（CLI · MCP · Skill）。本插件仅负责 Zotero 右键菜单集成、进度显示和附件导入，不复制或重新实现任何下载逻辑。
+
+paperfetch 支持 17 个出版社/平台全文 provider：arXiv、Elsevier、Springer、Wiley、Science、PNAS、IEEE、Copernicus、AMS、MDPI、Royal Society Publishing、Annual Reviews、PLOS、Oxford Academic、ACS、IOP 和 AIP。
 
 ## 📄 许可证
 
@@ -145,21 +166,22 @@ MIT License
 
 Copyright (c) 2026 douxy1994
 
-The paper-fetch skill is Copyright (c) Dictation354, licensed under its respective terms. See [paper-fetch-skill](https://github.com/Dictation354/paper-fetch-skill) for details.
+The paper-fetch skill is licensed under its respective terms. See [paperfetch](https://github.com/douxy1994/paperfetch) for details.
 
 ---
 
 # Skill Fulltext Downloader for Zotero (English)
 
-Integrates the paper-fetching capability of [paper-fetch-skill](https://github.com/Dictation354/paper-fetch-skill) into Zotero, enabling one-click full-text download and automatic attachment import.
+Integrates the paper-fetching capability of [paperfetch](https://github.com/douxy1994/paperfetch) into Zotero, enabling one-click full-text download and automatic attachment import.
 
 ## ✨ Features
 
-- **Context Menu Integration**: Right-click any item in Zotero to see "Skill Download Full Text"
-- **Batch Download**: Select multiple items and download them all at once with a progress dialog
-- **Progress Dialog**: Centered dialog with progress bar, per-item status (pending / downloading / success / failed), and cancel support
-- **Auto Import**: Downloaded PDF (preferred) or Markdown full text is automatically imported as a child attachment of the corresponding Zotero item
+- **Context Menu Integration**: Right-click any item in Zotero to see "Skill Download Full Text" with an icon
+- **Batch Download**: Select multiple items and download them all at once
+- **Progress Dialog**: Centered dialog with progress bar, per-item status (⏳ pending / 🔄 downloading / ✅ success / ❌ failed), and cancel support
+- **Auto Import**: Downloaded PDF (preferred) or Markdown full text is automatically imported as a child attachment
 - **Smart Query**: Constructs queries in priority order: DOI → URL → Title
+- **Two-Step Fallback**: First tries full mode (with browser, may get PDF), then falls back to no-browser mode (fast Markdown)
 - **Dark Mode**: Dialog follows system theme (light/dark)
 - **Bilingual**: Chinese and English UI
 
@@ -173,11 +195,17 @@ Integrates the paper-fetching capability of [paper-fetch-skill](https://github.c
 
 ### Install paper-fetch
 
+**Offline install (recommended):**
+
+Download the appropriate installer from [paperfetch Releases](https://github.com/douxy1994/paperfetch/releases).
+
+**Online install:**
+
 ```bash
 pip install paper-fetch
 ```
 
-See [paper-fetch-skill](https://github.com/Dictation354/paper-fetch-skill) for details.
+See [paperfetch](https://github.com/douxy1994/paperfetch) for details.
 
 ## 📥 Installation
 
@@ -214,14 +242,23 @@ The plugin constructs paper-fetch queries in this priority:
 2. **URL** (from the item's URL field)
 3. **Title** (last resort, may be ambiguous)
 
+### Download Strategy
+
+The plugin uses a two-step fallback strategy:
+
+| Step | Mode | Timeout | Description |
+|------|------|---------|-------------|
+| 1 | Full mode (`--artifact-mode markdown-assets --asset-profile body`) | 120s | Attempts to get PDF and body image assets via browser |
+| 2 | Fallback mode (`--artifact-mode none`) | 60s | Skips browser, quickly gets Markdown full text |
+
 ### Download Results
 
 | File Type | Description |
 |-----------|-------------|
-| PDF | Preferred (when paper-fetch obtains a PDF) |
+| PDF | Preferred (when browser link succeeds) |
 | Markdown | Fallback (paper-fetch's AI-friendly Markdown full text) |
 
-> **Note**: paper-fetch's ability to retrieve full text depends on the paper's open access status. Open access papers (e.g., MDPI, arXiv) typically succeed; paywalled papers may only yield abstracts or metadata.
+> **Note**: paper-fetch's ability to retrieve full text depends on the paper's open access status and provider configuration. Open access papers (e.g., MDPI, arXiv) typically succeed; paywalled papers may only yield abstracts or metadata. Browser link (Playwright/CDP) stability may affect PDF retrieval.
 
 ## 🏗️ Project Structure
 
@@ -262,24 +299,38 @@ Progress dialog appears
 Process each item:
   1. Extract DOI/URL/Title
   2. Create temp directory
-  3. Call paper-fetch CLI
-  4. Find generated PDF/Markdown
-  5. Import as Zotero attachment
-  6. Update dialog status
+  3. Call paper-fetch CLI (full mode, 120s timeout)
+  4. If full mode fails → fallback to no-browser mode (60s timeout)
+  5. Find generated PDF/Markdown (PDF preferred)
+  6. Import as Zotero attachment
+  7. Update dialog status
     ↓
 All done → Enable "Close" button
 ```
+
+### paper-fetch CLI Parameters
+
+| Parameter | Full Mode | Fallback Mode |
+|-----------|-----------|---------------|
+| `--format` | json | json |
+| `--output` | result.json | result.json |
+| `--output-dir` | work directory | work directory |
+| `--save-markdown` | ✅ | ✅ |
+| `--artifact-mode` | markdown-assets | none |
+| `--asset-profile` | body | - |
 
 ## 📋 Known Limitations
 
 1. **Paywalled Papers**: paper-fetch cannot bypass paywalls; only open access full text is available
 2. **Title Ambiguity**: Items without DOI may fail when title queries return multiple candidates
-3. **Download Timeout**: Individual papers exceeding 5 minutes are automatically cancelled
+3. **Browser Link**: Playwright/CDP EPIPE compatibility issues may cause PDF retrieval failure; auto-fallback to Markdown
 4. **macOS Only**: Currently uses `/bin/zsh`; Windows/Linux adaptation needed
 
 ## 🙏 Acknowledgments
 
-The core download capability of this plugin comes entirely from [paper-fetch-skill](https://github.com/Dictation354/paper-fetch-skill) (author: [@Dictation354](https://github.com/Dictation354)). This plugin only handles Zotero context menu integration, progress display, and attachment import. It does not replicate or re-implement any download logic.
+The core download capability of this plugin comes entirely from [paperfetch](https://github.com/douxy1994/paperfetch) (CLI · MCP · Skill). This plugin only handles Zotero context menu integration, progress display, and attachment import. It does not replicate or re-implement any download logic.
+
+paperfetch supports 17 publisher/platform full-text providers: arXiv, Elsevier, Springer, Wiley, Science, PNAS, IEEE, Copernicus, AMS, MDPI, Royal Society Publishing, Annual Reviews, PLOS, Oxford Academic, ACS, IOP, and AIP.
 
 ## 📄 License
 
@@ -287,4 +338,4 @@ MIT License
 
 Copyright (c) 2026 douxy1994
 
-The paper-fetch skill is Copyright (c) Dictation354, licensed under its respective terms. See [paper-fetch-skill](https://github.com/Dictation354/paper-fetch-skill) for details.
+The paper-fetch skill is licensed under its respective terms. See [paperfetch](https://github.com/douxy1994/paperfetch) for details.

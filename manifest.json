@@ -1,19 +1,14 @@
 {
   "manifest_version": 2,
   "name": "Skill Fulltext Downloader",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Add a Zotero item context-menu action that downloads full text through paper-fetch and imports it as an item attachment.",
-  "author": "Codex",
-  "homepage_url": "https://github.com/Dictation354/paper-fetch-skill/releases/tag/v2.5.0",
-  "icons": {
-    "16": "content/icons/icon16.svg",
-    "48": "content/icons/icon16.svg",
-    "96": "content/icons/icon16.svg"
-  },
+  "author": "douxy1994",
+  "homepage_url": "https://github.com/douxy1994/paperfetch",
   "applications": {
     "zotero": {
       "id": "skill-fulltext-downloader@example.com",
-      "update_url": "https://example.com/skill-fulltext-zotero/updates.json",
+      "update_url": "https://github.com/douxy1994/Zotero_paper_download/releases/download/v0.4.0/updates.json",
       "strict_min_version": "6.999",
       "strict_max_version": "9.0.*"
     }
