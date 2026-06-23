@@ -61,7 +61,7 @@ var SkillFulltextDownloader = {
     var win = Zotero.getMainWindow();
     self.dialog = win.openDialog(
       "about:blank", "skill-fulltext-dialog",
-      "chrome,centerscreen,resizable=yes,width=520,height=420,modal=no,dependent=no"
+      "chrome,centerscreen,resizable=yes,width=520,height=420,maxwidth=520,maxheight=420,modal=no,dependent=no"
     );
 
     self.dialog.addEventListener("load", function () {
@@ -118,12 +118,12 @@ var SkillFulltextDownloader = {
 
     var listbox = doc.createXULElement("vbox");
     listbox.setAttribute("id", "sf-list");
-    listbox.setAttribute("style", "flex:1;overflow-y:auto;border:1px solid var(--border);border-radius:4px;background:var(--item-bg);color:var(--item-fg);padding:4px;");
+    listbox.setAttribute("style", "flex:1;overflow-y:auto;max-height:280px;border:1px solid var(--border);border-radius:4px;background:var(--item-bg);color:var(--item-fg);padding:4px;");
 
     for (var i = 0; i < items.length; i++) {
       var row = doc.createXULElement("hbox");
       row.setAttribute("id", "sf-item-" + i);
-      row.setAttribute("style", "padding:6px 8px;border-bottom:1px solid rgba(128,128,128,0.2);align-items:center;gap:8px;");
+      row.setAttribute("style", "padding:6px 8px;border-bottom:1px solid rgba(128,128,128,0.2);align-items:center;gap:8px;flex-shrink:0;");
       var icon = doc.createXULElement("label");
       icon.setAttribute("id", "sf-icon-" + i);
       icon.setAttribute("value", "\u23F3");
