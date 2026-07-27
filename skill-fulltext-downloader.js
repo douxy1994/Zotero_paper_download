@@ -283,7 +283,8 @@ var SkillFulltextDownloader = {
   _runPaperFetch: function (query, outputDir, resultJSON, stdoutLog, stderrLog) {
     var self = this;
 
-    // Step 1: Full mode (may get PDF via browser), 120s timeout
+    // Step 1: Full mode (may get PDF via browser), 180s timeout
+    // (Camoufox may download its browser runtime on first run, which can exceed 120s)
     var fullScript = [
       "set -euo pipefail",
       "export PATH=\"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/opt/local/bin:$PATH\"",
@@ -299,13 +300,14 @@ var SkillFulltextDownloader = {
       "export PATH=\"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/opt/local/bin:$PATH\"",
       "BIN=\"/opt/homebrew/bin/paper-fetch\"",
       "if [ ! -x \"$BIN\" ]; then BIN=\"$(command -v paper-fetch || true)\"; fi",
+      "if [ -z \"$BIN\" ]; then echo \"paper-fetch CLI not found\" >&2; exit 127; fi",
       "\"$BIN\" --query \"$1\" --format json --output \"$3\" --output-dir \"$2\" --save-markdown --artifact-mode none >\"$4\" 2>\"$5\""
     ].join("\n");
 
     return self._runProcess("/bin/zsh", [
       "-lc", fullScript, "skill-fulltext-zotero",
       query, outputDir, resultJSON, stdoutLog, stderrLog
-    ], 120000).then(function () {
+    ], 180000).then(function () {
       return self._hasFile(outputDir);
     }).then(function (hasFile) {
       if (hasFile) return true;

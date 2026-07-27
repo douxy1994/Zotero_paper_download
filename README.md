@@ -18,7 +18,7 @@
 | 组件 | 要求 |
 |------|------|
 | Zotero | 9.0+（兼容 7/8 bootstrapped 插件结构） |
-| paper-fetch CLI | 已安装并在 PATH 中，或位于 `/opt/homebrew/bin/paper-fetch` |
+| paper-fetch CLI | 已安装并在 PATH 中，或位于 `/opt/homebrew/bin/paper-fetch`；建议 ≥ 4.0（4.0 起浏览器后端仅支持 Camoufox，旧版 CloakBrowser 已移除） |
 | 操作系统 | macOS / Linux（需要 zsh） |
 
 ### 安装 paper-fetch
@@ -30,7 +30,7 @@
 **在线安装：**
 
 ```bash
-pip install paper-fetch
+pip install paper-fetch-skill
 ```
 
 详见 [paperfetch](https://github.com/douxy1994/paperfetch) 文档。
@@ -76,7 +76,7 @@ zip -r skill-fulltext-zotero.xpi . -x "*.DS_Store" "*.git*"
 
 | 步骤 | 模式 | 超时 | 说明 |
 |------|------|------|------|
-| 1 | 完整模式 (`--artifact-mode markdown-assets --asset-profile body`) | 120秒 | 尝试通过浏览器获取 PDF 和正文图片资源 |
+| 1 | 完整模式 (`--artifact-mode markdown-assets --asset-profile body`) | 180秒 | 尝试通过浏览器获取 PDF 和正文图片资源（paper-fetch 4.x 的 Camoufox 首次运行需下载浏览器运行时，故放宽超时）|
 | 2 | 降级模式 (`--artifact-mode none`) | 60秒 | 跳过浏览器，快速获取 Markdown 全文 |
 
 ### 下载结果
@@ -127,7 +127,7 @@ Zotero_paper_download/
 逐条处理：
   1. 提取 DOI/URL/标题
   2. 创建临时目录
-  3. 调用 paper-fetch CLI（完整模式，120s 超时）
+  3. 调用 paper-fetch CLI（完整模式，180s 超时）
   4. 如果完整模式失败 → 降级到无浏览器模式（60s 超时）
   5. 查找生成的 PDF/Markdown（优先 PDF）
   6. 导入为 Zotero 附件
@@ -190,7 +190,7 @@ Integrates the paper-fetching capability of [paperfetch](https://github.com/doux
 | Component | Requirement |
 |-----------|-------------|
 | Zotero | 9.0+ (compatible with 7/8 bootstrapped plugin structure) |
-| paper-fetch CLI | Installed and on PATH, or at `/opt/homebrew/bin/paper-fetch` |
+| paper-fetch CLI | Installed and on PATH, or at `/opt/homebrew/bin/paper-fetch`; ≥ 4.0 recommended (4.0 supports only the Camoufox browser backend; the legacy CloakBrowser backend was removed) |
 | OS | macOS / Linux (requires zsh) |
 
 ### Install paper-fetch
@@ -202,7 +202,7 @@ Download the appropriate installer from [paperfetch Releases](https://github.com
 **Online install:**
 
 ```bash
-pip install paper-fetch
+pip install paper-fetch-skill
 ```
 
 See [paperfetch](https://github.com/douxy1994/paperfetch) for details.
@@ -248,7 +248,7 @@ The plugin uses a two-step fallback strategy:
 
 | Step | Mode | Timeout | Description |
 |------|------|---------|-------------|
-| 1 | Full mode (`--artifact-mode markdown-assets --asset-profile body`) | 120s | Attempts to get PDF and body image assets via browser |
+| 1 | Full mode (`--artifact-mode markdown-assets --asset-profile body`) | 180s | Attempts to get PDF and body image assets via browser (paper-fetch 4.x Camoufox may download its browser runtime on first run, hence the longer timeout) |
 | 2 | Fallback mode (`--artifact-mode none`) | 60s | Skips browser, quickly gets Markdown full text |
 
 ### Download Results
@@ -299,7 +299,7 @@ Progress dialog appears
 Process each item:
   1. Extract DOI/URL/Title
   2. Create temp directory
-  3. Call paper-fetch CLI (full mode, 120s timeout)
+  3. Call paper-fetch CLI (full mode, 180s timeout)
   4. If full mode fails → fallback to no-browser mode (60s timeout)
   5. Find generated PDF/Markdown (PDF preferred)
   6. Import as Zotero attachment
