@@ -18,7 +18,7 @@
 | 组件 | 要求 |
 |------|------|
 | Zotero | 9.0+（兼容 7/8 bootstrapped 插件结构） |
-| paper-fetch CLI | 已安装并在 PATH 中，或位于 `/opt/homebrew/bin/paper-fetch`；建议 ≥ 4.0（4.0 起浏览器后端仅支持 Camoufox，旧版 CloakBrowser 已移除） |
+| paper-fetch CLI | 已安装并在 PATH 中，或位于 `/opt/homebrew/bin/paper-fetch`；兼容 4.x / 5.x，建议 ≥ 5.3（4.0 起浏览器后端仅支持 Camoufox，旧版 CloakBrowser 已移除；5.2 起新增 Taylor & Francis Online provider） |
 | 操作系统 | macOS / Linux（需要 zsh） |
 
 ### 安装 paper-fetch
@@ -76,8 +76,8 @@ zip -r skill-fulltext-zotero.xpi . -x "*.DS_Store" "*.git*"
 
 | 步骤 | 模式 | 超时 | 说明 |
 |------|------|------|------|
-| 1 | 完整模式 (`--artifact-mode markdown-assets --asset-profile body`) | 180秒 | 尝试通过浏览器获取 PDF 和正文图片资源（paper-fetch 4.x 的 Camoufox 首次运行需下载浏览器运行时，故放宽超时）|
-| 2 | 降级模式 (`--artifact-mode none`) | 60秒 | 跳过浏览器，快速获取 Markdown 全文 |
+| 1 | 完整模式 (`fetch --artifact-mode markdown-assets --asset-profile body`) | 180秒 | 尝试通过浏览器获取 PDF 和正文图片资源（Camoufox 首次运行需下载浏览器运行时，故放宽超时）|
+| 2 | 降级模式 (`fetch --artifact-mode none`) | 60秒 | 跳过浏览器，快速获取 Markdown 全文 |
 
 ### 下载结果
 
@@ -86,7 +86,7 @@ zip -r skill-fulltext-zotero.xpi . -x "*.DS_Store" "*.git*"
 | PDF | 优先导入（当浏览器链路成功时） |
 | Markdown | 备选导入（paper-fetch 的 AI 友好 Markdown 全文） |
 
-> **注意**：paper-fetch 能否获取全文取决于论文的开放获取状态和 provider 配置。开放获取论文（如 MDPI、arXiv）通常能成功下载；付费墙论文可能只能获取摘要或元数据。浏览器链路（Playwright/CDP）的稳定性可能影响 PDF 获取。
+> **注意**：paper-fetch 能否获取全文取决于论文的开放获取状态和 provider 配置。开放获取论文（如 MDPI、arXiv）通常能成功下载；付费墙论文可能只能获取摘要或元数据。浏览器链路（Camoufox）的稳定性可能影响 PDF 获取。
 
 ## 🏗️ 项目结构
 
@@ -151,14 +151,14 @@ Zotero_paper_download/
 
 1. **付费墙论文**：paper-fetch 不绕过付费墙，只能获取开放获取的全文
 2. **标题歧义**：没有 DOI 的题录用标题查询时，paper-fetch 可能返回多个候选导致失败
-3. **浏览器链路**：Playwright/CDP 的 EPIPE 兼容性问题可能导致 PDF 获取失败，此时自动降级为 Markdown
+3. **浏览器链路**：Camoufox 浏览器运行时的下载与站点验证可能影响 PDF 获取，此时自动降级为 Markdown
 4. **macOS 专用**：当前使用 `/bin/zsh` 执行命令，Windows/Linux 需要适配
 
 ## 🙏 致谢
 
 本插件的核心下载能力完全来自 [paperfetch](https://github.com/douxy1994/paperfetch)（CLI · MCP · Skill）。本插件仅负责 Zotero 右键菜单集成、进度显示和附件导入，不复制或重新实现任何下载逻辑。
 
-paperfetch 支持 17 个出版社/平台全文 provider：arXiv、Elsevier、Springer、Wiley、Science、PNAS、IEEE、Copernicus、AMS、MDPI、Royal Society Publishing、Annual Reviews、PLOS、Oxford Academic、ACS、IOP 和 AIP。
+paperfetch 支持 19 个出版社/平台全文 provider：arXiv、Elsevier、Springer、Wiley、Science、PNAS、IEEE、Copernicus、AMS、MDPI、Royal Society Publishing、Annual Reviews、PLOS、Frontiers、Oxford Academic、ACS、IOP、AIP 和 Taylor & Francis Online。
 
 ## 📄 许可证
 
@@ -190,7 +190,7 @@ Integrates the paper-fetching capability of [paperfetch](https://github.com/doux
 | Component | Requirement |
 |-----------|-------------|
 | Zotero | 9.0+ (compatible with 7/8 bootstrapped plugin structure) |
-| paper-fetch CLI | Installed and on PATH, or at `/opt/homebrew/bin/paper-fetch`; ≥ 4.0 recommended (4.0 supports only the Camoufox browser backend; the legacy CloakBrowser backend was removed) |
+| paper-fetch CLI | Installed and on PATH, or at `/opt/homebrew/bin/paper-fetch`; compatible with 4.x / 5.x, ≥ 5.3 recommended (4.0 supports only the Camoufox browser backend; the legacy CloakBrowser backend was removed; 5.2 added the Taylor & Francis Online provider) |
 | OS | macOS / Linux (requires zsh) |
 
 ### Install paper-fetch
@@ -248,8 +248,8 @@ The plugin uses a two-step fallback strategy:
 
 | Step | Mode | Timeout | Description |
 |------|------|---------|-------------|
-| 1 | Full mode (`--artifact-mode markdown-assets --asset-profile body`) | 180s | Attempts to get PDF and body image assets via browser (paper-fetch 4.x Camoufox may download its browser runtime on first run, hence the longer timeout) |
-| 2 | Fallback mode (`--artifact-mode none`) | 60s | Skips browser, quickly gets Markdown full text |
+| 1 | Full mode (`fetch --artifact-mode markdown-assets --asset-profile body`) | 180s | Attempts to get PDF and body image assets via browser (Camoufox may download its browser runtime on first run, hence the longer timeout) |
+| 2 | Fallback mode (`fetch --artifact-mode none`) | 60s | Skips browser, quickly gets Markdown full text |
 
 ### Download Results
 
@@ -258,7 +258,7 @@ The plugin uses a two-step fallback strategy:
 | PDF | Preferred (when browser link succeeds) |
 | Markdown | Fallback (paper-fetch's AI-friendly Markdown full text) |
 
-> **Note**: paper-fetch's ability to retrieve full text depends on the paper's open access status and provider configuration. Open access papers (e.g., MDPI, arXiv) typically succeed; paywalled papers may only yield abstracts or metadata. Browser link (Playwright/CDP) stability may affect PDF retrieval.
+> **Note**: paper-fetch's ability to retrieve full text depends on the paper's open access status and provider configuration. Open access papers (e.g., MDPI, arXiv) typically succeed; paywalled papers may only yield abstracts or metadata. Browser link (Camoufox) stability may affect PDF retrieval.
 
 ## 🏗️ Project Structure
 
@@ -323,14 +323,14 @@ All done → Enable "Close" button
 
 1. **Paywalled Papers**: paper-fetch cannot bypass paywalls; only open access full text is available
 2. **Title Ambiguity**: Items without DOI may fail when title queries return multiple candidates
-3. **Browser Link**: Playwright/CDP EPIPE compatibility issues may cause PDF retrieval failure; auto-fallback to Markdown
+3. **Browser Link**: Camoufox browser runtime download and site verification may affect PDF retrieval; auto-fallback to Markdown
 4. **macOS Only**: Currently uses `/bin/zsh`; Windows/Linux adaptation needed
 
 ## 🙏 Acknowledgments
 
 The core download capability of this plugin comes entirely from [paperfetch](https://github.com/douxy1994/paperfetch) (CLI · MCP · Skill). This plugin only handles Zotero context menu integration, progress display, and attachment import. It does not replicate or re-implement any download logic.
 
-paperfetch supports 17 publisher/platform full-text providers: arXiv, Elsevier, Springer, Wiley, Science, PNAS, IEEE, Copernicus, AMS, MDPI, Royal Society Publishing, Annual Reviews, PLOS, Oxford Academic, ACS, IOP, and AIP.
+paperfetch supports 19 publisher/platform full-text providers: arXiv, Elsevier, Springer, Wiley, Science, PNAS, IEEE, Copernicus, AMS, MDPI, Royal Society Publishing, Annual Reviews, PLOS, Frontiers, Oxford Academic, ACS, IOP, AIP, and Taylor & Francis Online.
 
 ## 📄 License
 
