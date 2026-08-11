@@ -187,7 +187,8 @@ var SkillFulltextDownloader = {
       status.setAttribute("style", "font-size:11px;color:#388e3c;min-width:50px;");
     } else if (state === "error") {
       icon.setAttribute("value", "\u274C");
-      status.setAttribute("value", (msg || "\u5931\u8D25").slice(0, 20));
+      status.setAttribute("value", (msg || "\u5931\u8D25").slice(0, 36));
+      status.setAttribute("tooltiptext", msg || "\u5931\u8D25");
       status.setAttribute("style", "font-size:11px;color:#d32f2f;min-width:50px;");
     }
   },
@@ -244,43 +245,56 @@ var SkillFulltextDownloader = {
     var tmpRoot = Services.dirsvc.get("TmpD", Ci.nsIFile).path;
     var workDir = PathUtils.join(tmpRoot, "skill-fulltext-zotero", item.key + "-" + Date.now());
     var resultJSON = PathUtils.join(workDir, "paper-fetch-result.json");
+    var fallbackResultJSON = PathUtils.join(workDir, "paper-fetch-result.fallback.json");
     var stdoutLog = PathUtils.join(workDir, "paper-fetch.stdout.log");
     var stderrLog = PathUtils.join(workDir, "paper-fetch.stderr.log");
+    var fallbackStdoutLog = PathUtils.join(workDir, "paper-fetch.fallback.stdout.log");
+    var fallbackStderrLog = PathUtils.join(workDir, "paper-fetch.fallback.stderr.log");
 
     var self = this;
-    return IOUtils.makeDirectory(workDir, { createAncestors: true }).then(function () {
-      return self._runPaperFetch(query, workDir, resultJSON, stdoutLog, stderrLog);
-    }).then(function () {
-      return self._pickAttachmentFile(workDir);
-    }).then(function (file) {
-      if (!file) {
-        return IOUtils.exists(stderrLog).then(function (ex) {
-          if (ex) return IOUtils.readUTF8(stderrLog);
-          return "";
-        }).then(function (se) {
-          var detail = "";
-          if (se) {
-            try {
-              var payload = JSON.parse(se);
-              if (payload.status === "ambiguous") detail = "\u6807\u9898\u6B67\u4E49\uFF0C\u8BF7\u8865\u5145DOI";
-              else if (payload.reason) detail = payload.reason.slice(0, 80);
-              else detail = se.slice(0, 80);
-            } catch (e) { detail = se.slice(0, 80); }
-          }
-          throw new Error("\u672A\u751F\u6210\u6587\u4EF6" + (detail ? ": " + detail : ""));
+    return self._findExistingPDFAttachment(item).then(function (existing) {
+      if (existing) return existing;
+
+      return IOUtils.makeDirectory(workDir, { createAncestors: true }).then(function () {
+        return self._runPaperFetch(
+          query, workDir,
+          resultJSON, stdoutLog, stderrLog,
+          fallbackResultJSON, fallbackStdoutLog, fallbackStderrLog
+        );
+      }).then(function () {
+        return self._pickAttachmentFile(workDir);
+      }).then(function (file) {
+        if (!file) throw new Error("paper-fetch \u672A\u751F\u6210\u53EF\u5BFC\u5165\u6587\u4EF6");
+        var contentType = file.toLowerCase().endsWith(".pdf") ? "application/pdf" : "text/markdown";
+        var title = contentType === "application/pdf" ? "Skill \u4E0B\u8F7D\u5168\u6587" : "Skill \u4E0B\u8F7D\u5168\u6587 (Markdown)";
+        return Zotero.Attachments.importFromFile({
+          file: file, parentItemID: item.id, title: title,
+          fileBaseName: Zotero.Attachments.getFileBaseNameFromItem(item, { attachmentTitle: title }),
+          contentType: contentType
         });
-      }
-      var contentType = file.toLowerCase().endsWith(".pdf") ? "application/pdf" : "text/markdown";
-      var title = contentType === "application/pdf" ? "Skill \u4E0B\u8F7D\u5168\u6587" : "Skill \u4E0B\u8F7D\u5168\u6587 (Markdown)";
-      return Zotero.Attachments.importFromFile({
-        file: file, parentItemID: item.id, title: title,
-        fileBaseName: Zotero.Attachments.getFileBaseNameFromItem(item, { attachmentTitle: title }),
-        contentType: contentType
+      }).catch(function (fetchErr) {
+        // Zotero may still be finishing its own OA attachment download after
+        // paper-fetch exits. Observe that state before starting another request.
+        return self._waitForExistingPDFAttachment(item, 20000, 1000).then(function (existing) {
+          if (existing) return existing;
+          return self._tryZoteroAvailableFile(item);
+        }).then(function (attachment) {
+          if (attachment) return attachment;
+          return self._paperFetchFailureDetail([
+            fallbackResultJSON, resultJSON, fallbackStderrLog, stderrLog
+          ]).then(function (detail) {
+            throw new Error(detail || fetchErr.message || "\u672A\u627E\u5230\u53EF\u7528\u5168\u6587");
+          });
+        });
       });
     });
   },
 
-  _runPaperFetch: function (query, outputDir, resultJSON, stdoutLog, stderrLog) {
+  _runPaperFetch: function (
+    query, outputDir,
+    resultJSON, stdoutLog, stderrLog,
+    fallbackResultJSON, fallbackStdoutLog, fallbackStderrLog
+  ) {
     var self = this;
 
     // Step 1: Full mode (may get PDF via browser), 180s timeout
@@ -319,7 +333,7 @@ var SkillFulltextDownloader = {
       // Fallback: no-browser mode
       return self._runProcess("/bin/zsh", [
         "-lc", fallbackScript, "skill-fulltext-zotero",
-        query, outputDir, resultJSON, stdoutLog, stderrLog
+        query, outputDir, fallbackResultJSON, fallbackStdoutLog, fallbackStderrLog
       ], 60000).then(function () {
         return self._hasFile(outputDir);
       }).then(function (hasFile) {
@@ -327,6 +341,79 @@ var SkillFulltextDownloader = {
         throw new Error(fullErr.message);
       });
     });
+  },
+
+  _findExistingPDFAttachment: async function (item) {
+    var ids = item && item.getAttachments ? item.getAttachments() : [];
+    for (var id of ids) {
+      try {
+        var attachment = Zotero.Items.get(id);
+        if (!attachment || !attachment.isAttachment()) continue;
+        var contentType = attachment.attachmentContentType || attachment.getField("contentType") || "";
+        if (contentType.toLowerCase() !== "application/pdf") continue;
+        var path = await attachment.getFilePathAsync();
+        if (!path || !(await IOUtils.exists(path))) continue;
+        var stat = await IOUtils.stat(path);
+        if (stat.type === "regular" && stat.size > 4) return attachment;
+      } catch (e) {
+        Zotero.debug("Skill Fulltext: failed to inspect existing attachment: " + e, 2);
+      }
+    }
+    return null;
+  },
+
+  _waitForExistingPDFAttachment: async function (item, timeout, interval) {
+    var deadline = Date.now() + timeout;
+    do {
+      var attachment = await this._findExistingPDFAttachment(item);
+      if (attachment) return attachment;
+      if (Date.now() >= deadline) break;
+      await Zotero.Promise.delay(interval);
+    } while (true);
+    return null;
+  },
+
+  _tryZoteroAvailableFile: async function (item) {
+    try {
+      var existing = await this._findExistingPDFAttachment(item);
+      if (existing) return existing;
+      if (!Zotero.Attachments.addAvailableFile) return null;
+      var attachment = await Zotero.Attachments.addAvailableFile(item, {
+        methods: ["doi", "url", "oa"]
+      });
+      return attachment || await this._findExistingPDFAttachment(item);
+    } catch (e) {
+      Zotero.debug("Skill Fulltext: Zotero OA fallback failed: " + e, 2);
+      return null;
+    }
+  },
+
+  _paperFetchFailureDetail: async function (paths) {
+    for (var path of paths) {
+      try {
+        if (!(await IOUtils.exists(path))) continue;
+        var text = (await IOUtils.readUTF8(path)).trim();
+        if (!text) continue;
+        try {
+          var payload = JSON.parse(text);
+          if (payload.status === "ambiguous") return "\u6807\u9898\u6B67\u4E49\uFF0C\u8BF7\u8865\u5145 DOI";
+          if (payload.reason) return String(payload.reason).slice(0, 160);
+          var quality = payload.quality || {};
+          var warnings = quality.warnings || [];
+          if (warnings.length) {
+            var warning = String(warnings[0]);
+            if (warning.includes("Rejected unsafe remote URL")) {
+              return "paper-fetch \u88AB\u4EE3\u7406 DNS/\u5730\u5740\u5B89\u5168\u68C0\u67E5\u62E6\u622A";
+            }
+            return warning.slice(0, 160);
+          }
+          if (quality.content_kind === "metadata_only") return "paper-fetch \u4EC5\u8FD4\u56DE\u5143\u6570\u636E\uFF0C\u672A\u83B7\u53D6\u5168\u6587";
+        } catch (e) {
+          return text.slice(0, 160);
+        }
+      } catch (e) {}
+    }
+    return "";
   },
 
   _hasFile: async function (dir) {

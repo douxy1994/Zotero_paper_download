@@ -7,7 +7,7 @@
 - **右键菜单集成**：在 Zotero 题录列表中右键即可看到「skill下载全文」菜单项，带图标
 - **批量下载**：支持同时选中多个题录批量下载
 - **进度弹窗**：居中弹窗显示下载进度，包含进度条、每条题录状态（⏳等待 / 🔄下载中 / ✅完成 / ❌失败）、可取消
-- **自动导入附件**：下载完成后自动将 PDF（优先）或 Markdown 全文导入为对应题录的子附件
+- **自动导入附件**：下载完成后自动将 PDF（优先）或 Markdown 全文导入为对应题录的子附件；若 Zotero 已下载 OA PDF，则直接识别现有附件，避免把成功下载误报为失败
 - **智能查询**：按 DOI → URL → 标题 的优先级构造查询
 - **两步降级策略**：先尝试完整模式（含浏览器，可能拿到 PDF），失败后自动降级到无浏览器模式（快速拿 Markdown）
 - **深色模式**：弹窗跟随系统主题自动切换深色/浅色
@@ -54,6 +54,17 @@ zip -r skill-fulltext-zotero.xpi . -x "*.DS_Store" "*.git*"
 ```
 
 然后在 Zotero 中安装生成的 `skill-fulltext-zotero.xpi`。
+
+### 自动更新
+
+从 `0.6.1` 起，插件通过 Zotero 内置的附加组件更新器自动更新。插件清单使用固定的
+`main/updates.json` 地址检查新版本，匹配后由 Zotero 下载对应 Release 中的 XPI，并按
+SHA-256 校验。首次安装 `0.6.1` 后，后续版本无需再手动下载 XPI；请在 Zotero 的
+「工具 → 插件 → 齿轮」中保持「自动更新附加组件」启用。
+
+维护者发布新版本时运行 `scripts/build-release.sh`。脚本会读取 `manifest.json` 的版本号、
+构建最小 XPI，并原子更新 `updates.json` 中对应版本的下载链接和 SHA-256；随后发布同版本
+GitHub Release，并把 XPI、`updates.json` 与源码一并提交。
 
 ## 🚀 使用方法
 
@@ -130,8 +141,9 @@ Zotero_paper_download/
   3. 调用 paper-fetch CLI（完整模式，180s 超时）
   4. 如果完整模式失败 → 降级到无浏览器模式（60s 超时）
   5. 查找生成的 PDF/Markdown（优先 PDF）
-  6. 导入为 Zotero 附件
-  7. 更新弹窗状态
+  6. 若 paper-fetch 无产物，等待并识别 Zotero 已有 OA PDF，再调用 Zotero 原生可用全文解析器
+  7. 导入新文件或接受已存在的有效 PDF 附件；确无全文时显示具体诊断
+  8. 更新弹窗状态
     ↓
 全部完成 → 启用「关闭」按钮
 ```
@@ -179,7 +191,7 @@ Integrates the paper-fetching capability of [paperfetch](https://github.com/doux
 - **Context Menu Integration**: Right-click any item in Zotero to see "Skill Download Full Text" with an icon
 - **Batch Download**: Select multiple items and download them all at once
 - **Progress Dialog**: Centered dialog with progress bar, per-item status (⏳ pending / 🔄 downloading / ✅ success / ❌ failed), and cancel support
-- **Auto Import**: Downloaded PDF (preferred) or Markdown full text is automatically imported as a child attachment
+- **Auto Import**: Downloaded PDF (preferred) or Markdown full text is automatically imported as a child attachment; an OA PDF already downloaded by Zotero is recognized instead of being misreported as a failure
 - **Smart Query**: Constructs queries in priority order: DOI → URL → Title
 - **Two-Step Fallback**: First tries full mode (with browser, may get PDF), then falls back to no-browser mode (fast Markdown)
 - **Dark Mode**: Dialog follows system theme (light/dark)
@@ -226,6 +238,13 @@ zip -r skill-fulltext-zotero.xpi . -x "*.DS_Store" "*.git*"
 ```
 
 Then install the generated `skill-fulltext-zotero.xpi` in Zotero.
+
+### Automatic Updates
+
+Starting with `0.6.1`, the plugin uses Zotero's built-in add-on updater. Its manifest points to the
+stable `main/updates.json` URL; Zotero selects a compatible version, downloads the matching Release
+XPI, and verifies its SHA-256 hash. After installing `0.6.1` once, future versions no longer require
+manual XPI downloads. Keep “Update Add-ons Automatically” enabled in Zotero's Add-ons gear menu.
 
 ## 🚀 Usage
 
