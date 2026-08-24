@@ -17,7 +17,7 @@
 
 | 组件 | 要求 |
 |------|------|
-| Zotero | 9.0+（兼容 7/8 bootstrapped 插件结构） |
+| Zotero | 7.0–10.0（Zotero 8–10 使用官方 MenuManager；Zotero 7 使用兼容菜单路径） |
 | paper-fetch CLI | 已安装并在 PATH 中，或位于 `/opt/homebrew/bin/paper-fetch`；兼容 4.x / 5.x，建议 ≥ 5.3（4.0 起浏览器后端仅支持 Camoufox，旧版 CloakBrowser 已移除；5.2 起新增 Taylor & Francis Online provider） |
 | 操作系统 | macOS / Linux（需要 zsh） |
 
@@ -50,7 +50,7 @@ pip install paper-fetch-skill
 ```bash
 git clone https://github.com/douxy1994/Zotero_paper_download.git
 cd Zotero_paper_download
-zip -r skill-fulltext-zotero.xpi . -x "*.DS_Store" "*.git*"
+./scripts/build-release.sh
 ```
 
 然后在 Zotero 中安装生成的 `skill-fulltext-zotero.xpi`。
@@ -65,6 +65,14 @@ SHA-256 校验。首次安装 `0.6.1` 后，后续版本无需再手动下载 XP
 维护者发布新版本时运行 `scripts/build-release.sh`。脚本会读取 `manifest.json` 的版本号、
 构建最小 XPI，并原子更新 `updates.json` 中对应版本的下载链接和 SHA-256；随后发布同版本
 GitHub Release，并把 XPI、`updates.json` 与源码一并提交。
+
+### Zotero 10 兼容性
+
+`0.7.0` 已按 Zotero 10 插件规范验证，兼容范围为 Zotero 7.0–10.0。Zotero 10 对
+`MenuManager` 上下文的 `collectionTreeRow` 改为多选语义；本插件只读取稳定的
+`context.items`，不读取已变更的单选属性。Zotero 8–10 使用官方 `MenuManager`，
+Zotero 7 自动切换到题录右键菜单的兼容实现。插件不访问 Zotero 搜索 API、全文索引表、
+SQLite 数据库或本地 HTTP API，因此不受 Zotero 10 对这些接口的变更影响。
 
 ## 🚀 使用方法
 
@@ -122,8 +130,8 @@ Zotero_paper_download/
 
 ### 插件架构
 
-- **Bootstrapped 插件**：使用 Zotero 7+ 的 bootstrapped 插件结构，兼容 Zotero 9
-- **菜单注册**：通过 `Zotero.MenuManager.registerMenu()` 注册右键菜单
+- **Bootstrapped 插件**：使用 Zotero 7+ 的 bootstrapped 插件结构，兼容 Zotero 7–10
+- **菜单注册**：Zotero 8–10 通过 `Zotero.MenuManager.registerMenu()` 注册右键菜单，Zotero 7 使用功能检测后的兼容菜单
 - **进程调用**：通过 `nsIProcess` 调用本机 `paper-fetch` CLI
 - **附件导入**：通过 `Zotero.Attachments.importFromFile()` 导入文件
 - **进度弹窗**：使用 XUL `openDialog` 创建非阻塞的独立窗口
@@ -201,7 +209,7 @@ Integrates the paper-fetching capability of [paperfetch](https://github.com/doux
 
 | Component | Requirement |
 |-----------|-------------|
-| Zotero | 9.0+ (compatible with 7/8 bootstrapped plugin structure) |
+| Zotero | 7.0–10.0 (official MenuManager on Zotero 8–10; compatibility menu path on Zotero 7) |
 | paper-fetch CLI | Installed and on PATH, or at `/opt/homebrew/bin/paper-fetch`; compatible with 4.x / 5.x, ≥ 5.3 recommended (4.0 supports only the Camoufox browser backend; the legacy CloakBrowser backend was removed; 5.2 added the Taylor & Francis Online provider) |
 | OS | macOS / Linux (requires zsh) |
 
@@ -234,7 +242,7 @@ See [paperfetch](https://github.com/douxy1994/paperfetch) for details.
 ```bash
 git clone https://github.com/douxy1994/Zotero_paper_download.git
 cd Zotero_paper_download
-zip -r skill-fulltext-zotero.xpi . -x "*.DS_Store" "*.git*"
+./scripts/build-release.sh
 ```
 
 Then install the generated `skill-fulltext-zotero.xpi` in Zotero.
@@ -245,6 +253,14 @@ Starting with `0.6.1`, the plugin uses Zotero's built-in add-on updater. Its man
 stable `main/updates.json` URL; Zotero selects a compatible version, downloads the matching Release
 XPI, and verifies its SHA-256 hash. After installing `0.6.1` once, future versions no longer require
 manual XPI downloads. Keep “Update Add-ons Automatically” enabled in Zotero's Add-ons gear menu.
+
+### Zotero 10 Compatibility
+
+Version `0.7.0` is validated against the Zotero 10 plugin requirements and supports Zotero 7.0–10.0.
+It reads `context.items`, which remains supported for `MenuManager` item-menu contexts, and never
+reads the Zotero 10 multi-selection property that replaced `collectionTreeRow`. Zotero 8–10 use the
+official `MenuManager`; Zotero 7 uses a feature-detected item-menu fallback. The plugin does not use
+the search API, full-text index tables, direct SQLite access, or the local HTTP API changed in Zotero 10.
 
 ## 🚀 Usage
 
@@ -302,8 +318,8 @@ Zotero_paper_download/
 
 ### Plugin Architecture
 
-- **Bootstrapped Plugin**: Uses Zotero 7+ bootstrapped plugin structure, compatible with Zotero 9
-- **Menu Registration**: Uses `Zotero.MenuManager.registerMenu()` for context menu
+- **Bootstrapped Plugin**: Uses the Zotero 7+ bootstrapped plugin structure and supports Zotero 7–10
+- **Menu Registration**: Uses `Zotero.MenuManager.registerMenu()` on Zotero 8–10 and a feature-detected compatibility menu on Zotero 7
 - **Process Execution**: Calls local `paper-fetch` CLI via `nsIProcess`
 - **Attachment Import**: Uses `Zotero.Attachments.importFromFile()` to import files
 - **Progress Dialog**: Uses XUL `openDialog` for a non-blocking independent window

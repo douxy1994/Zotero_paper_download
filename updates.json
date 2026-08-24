@@ -3,6 +3,17 @@
     "skill-fulltext-downloader@example.com": {
       "updates": [
         {
+          "version": "0.7.0",
+          "update_link": "https://github.com/douxy1994/Zotero_paper_download/releases/download/v0.7.0/skill-fulltext-zotero.xpi",
+          "update_hash": "sha256:b83c43704a7ef329066623b6e8ea4fed52de92b35f682c8ba0f0572079ea2b7c",
+          "applications": {
+            "zotero": {
+              "strict_min_version": "6.999",
+              "strict_max_version": "10.0.*"
+            }
+          }
+        },
+        {
           "version": "0.6.1",
           "update_link": "https://github.com/douxy1994/Zotero_paper_download/releases/download/v0.6.1/skill-fulltext-zotero.xpi",
           "update_hash": "sha256:e32e00e4912b3499cac717194d72e0d88ea0ea6fef4638d3641a32a393daf823",

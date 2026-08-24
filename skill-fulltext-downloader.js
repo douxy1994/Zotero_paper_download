@@ -21,6 +21,13 @@ var SkillFulltextDownloader = {
         try { wins[i].MozXULElement.insertFTLIfNeeded("skill-fulltext-downloader.ftl"); } catch (e) {}
       }
     }
+    // Zotero.MenuManager was added in Zotero 8. Keep a small DOM fallback for
+    // Zotero 7 while using the supported API on Zotero 8-10.
+    if (!Zotero.MenuManager || !Zotero.MenuManager.registerMenu) {
+      for (var j = 0; j < wins.length; j++) self.addToWindow(wins[j]);
+      Zotero.debug("Skill Fulltext: registered Zotero 7 compatibility item menu");
+      return;
+    }
     self.menuID = Zotero.MenuManager.registerMenu({
       menuID: "skill-fulltext-download",
       pluginID: self.id,
@@ -41,14 +48,59 @@ var SkillFulltextDownloader = {
         }
       }]
     });
+    Zotero.debug("Skill Fulltext: registered MenuManager item menu");
   },
 
   shutdown: function () {
-    if (this.menuID) { Zotero.MenuManager.unregisterMenu(this.menuID); this.menuID = null; }
+    if (this.menuID && Zotero.MenuManager && Zotero.MenuManager.unregisterMenu) {
+      Zotero.MenuManager.unregisterMenu(this.menuID);
+      this.menuID = null;
+    }
+    var wins = Zotero.getMainWindows();
+    for (var i = 0; i < wins.length; i++) this.removeFromWindow(wins[i]);
   },
 
   addToWindow: function (win) {
     try { win.MozXULElement.insertFTLIfNeeded("skill-fulltext-downloader.ftl"); } catch (e) {}
+    if (Zotero.MenuManager && Zotero.MenuManager.registerMenu) return;
+    if (!win || !win.document || win.document.getElementById("skill-fulltext-download-legacy")) return;
+
+    var popup = win.document.getElementById("zotero-itemmenu");
+    if (!popup) return;
+    var self = this;
+    var menuitem = win.document.createXULElement("menuitem");
+    menuitem.id = "skill-fulltext-download-legacy";
+    menuitem.setAttribute("data-l10n-id", "skill-fulltext-download-menu");
+    menuitem.setAttribute("label", "Skill Download Full Text");
+    menuitem.addEventListener("command", function () {
+      if (self.isRunning || !win.ZoteroPane) return;
+      var items = (win.ZoteroPane.getSelectedItems() || []).filter(function (item) {
+        return item && item.isRegularItem();
+      });
+      if (items.length) self._doAll(items);
+    });
+    var updateState = function () {
+      var items = win.ZoteroPane ? (win.ZoteroPane.getSelectedItems() || []) : [];
+      var regularItems = items.filter(function (item) { return item && item.isRegularItem(); });
+      menuitem.hidden = regularItems.length === 0;
+      menuitem.disabled = self.isRunning || regularItems.length === 0;
+    };
+    popup.addEventListener("popupshowing", updateState);
+    menuitem._skillFulltextPopup = popup;
+    menuitem._skillFulltextUpdateState = updateState;
+    popup.appendChild(menuitem);
+  },
+
+  removeFromWindow: function (win) {
+    if (!win || !win.document) return;
+    var menuitem = win.document.getElementById("skill-fulltext-download-legacy");
+    if (!menuitem) return;
+    if (menuitem._skillFulltextPopup && menuitem._skillFulltextUpdateState) {
+      menuitem._skillFulltextPopup.removeEventListener(
+        "popupshowing", menuitem._skillFulltextUpdateState
+      );
+    }
+    menuitem.remove();
   },
 
   // ===== Progress Dialog =====
