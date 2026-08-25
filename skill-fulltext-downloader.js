@@ -6,6 +6,8 @@ var SkillFulltextDownloader = {
   isRunning: false,
   cancelled: false,
   dialog: null,
+  activeProcess: null,
+  activeProcessCancel: null,
 
   init: function (params) {
     this.id = params.id;
@@ -52,6 +54,7 @@ var SkillFulltextDownloader = {
   },
 
   shutdown: function () {
+    if (this.activeProcessCancel) this.activeProcessCancel();
     if (this.menuID && Zotero.MenuManager && Zotero.MenuManager.unregisterMenu) {
       Zotero.MenuManager.unregisterMenu(this.menuID);
       this.menuID = null;
@@ -217,6 +220,7 @@ var SkillFulltextDownloader = {
 
   _cancel: function () {
     this.cancelled = true;
+    if (this.activeProcessCancel) this.activeProcessCancel();
     var dlg = this.dialog;
     if (!dlg) return;
     var btn = dlg.document.getElementById("sf-cancel");
@@ -325,6 +329,7 @@ var SkillFulltextDownloader = {
           contentType: contentType
         });
       }).catch(function (fetchErr) {
+        if (self.cancelled) throw fetchErr;
         // Zotero may still be finishing its own OA attachment download after
         // paper-fetch exits. Observe that state before starting another request.
         return self._waitForExistingPDFAttachment(item, 20000, 1000).then(function (existing) {
@@ -349,8 +354,9 @@ var SkillFulltextDownloader = {
   ) {
     var self = this;
 
-    // Step 1: Full mode (may get PDF via browser), 180s timeout
-    // (Camoufox may download its browser runtime on first run, which can exceed 120s)
+    // Step 1: Full mode (may get PDF via browser), 1080s outer timeout.
+    // paper-fetch 5.4+ may spend up to 900s preparing Camoufox on first use,
+    // followed by a browser request. Older 4.x/5.x versions use the same flags.
     // Use the explicit `fetch` subcommand: the legacy root-level `--query` surface
     // is only kept for one compatibility cycle by upstream (4.x and 5.x both
     // support `fetch` with identical flags and exit-code/stdout/stderr contract).
@@ -376,12 +382,13 @@ var SkillFulltextDownloader = {
     return self._runProcess("/bin/zsh", [
       "-lc", fullScript, "skill-fulltext-zotero",
       query, outputDir, resultJSON, stdoutLog, stderrLog
-    ], 180000).then(function () {
+    ], 1080000).then(function () {
       return self._hasFile(outputDir);
     }).then(function (hasFile) {
       if (hasFile) return true;
       throw new Error("\u5B8C\u6574\u6A21\u5F0F\u672A\u751F\u6210\u6587\u4EF6");
     }, function (fullErr) {
+      if (self.cancelled) throw fullErr;
       // Fallback: no-browser mode
       return self._runProcess("/bin/zsh", [
         "-lc", fallbackScript, "skill-fulltext-zotero",
@@ -477,6 +484,7 @@ var SkillFulltextDownloader = {
   },
 
   _runProcess: function (command, args, timeout) {
+    var self = this;
     var file = Zotero.File.pathToFile(command);
     if (!file.exists() || !file.isExecutable()) {
       throw new Error(command + " \u4E0D\u5B58\u5728\u6216\u4E0D\u53EF\u6267\u884C");
@@ -485,29 +493,55 @@ var SkillFulltextDownloader = {
     process.init(file);
     var deferred = Zotero.Promise.defer();
     var finished = false;
-
-    process.runwAsync(args, args.length, {
-      observe: function (_subject, topic) {
-        if (finished) return;
-        finished = true;
-        if (topic !== "process-finished") {
-          deferred.reject(new Error("\u8FDB\u7A0B\u5F02\u5E38: " + topic));
-        } else if (process.exitValue !== 0) {
-          deferred.reject(new Error("paper-fetch \u9000\u51FA\u7801 " + process.exitValue));
-        } else {
-          deferred.resolve(true);
-        }
-      }
-    });
-
     var ms = timeout || 300000;
-    setTimeout(function () {
-      if (!finished) {
-        finished = true;
-        try { process.kill(); } catch (e) {}
-        deferred.reject(new Error("\u4E0B\u8F7D\u8D85\u65F6 (" + Math.round(ms / 1000) + "\u79D2)"));
+    var timer = null;
+
+    var cleanup = function () {
+      if (timer) { clearTimeout(timer); timer = null; }
+      if (self.activeProcess === process) {
+        self.activeProcess = null;
+        self.activeProcessCancel = null;
       }
+    };
+    var rejectOnce = function (error, killProcess) {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      if (killProcess) {
+        try { process.kill(); } catch (e) {}
+      }
+      deferred.reject(error);
+    };
+
+    self.activeProcess = process;
+    self.activeProcessCancel = function () {
+      rejectOnce(new Error("\u4E0B\u8F7D\u5DF2\u53D6\u6D88"), true);
+    };
+    timer = setTimeout(function () {
+      rejectOnce(
+        new Error("\u4E0B\u8F7D\u8D85\u65F6 (" + Math.round(ms / 1000) + "\u79D2)"),
+        true
+      );
     }, ms);
+
+    try {
+      process.runwAsync(args, args.length, {
+        observe: function (_subject, topic) {
+          if (finished) return;
+          if (topic !== "process-finished") {
+            rejectOnce(new Error("\u8FDB\u7A0B\u5F02\u5E38: " + topic), false);
+          } else if (process.exitValue !== 0) {
+            rejectOnce(new Error("paper-fetch \u9000\u51FA\u7801 " + process.exitValue), false);
+          } else {
+            finished = true;
+            cleanup();
+            deferred.resolve(true);
+          }
+        }
+      });
+    } catch (e) {
+      rejectOnce(e, false);
+    }
 
     return deferred.promise;
   },

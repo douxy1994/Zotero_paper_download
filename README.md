@@ -18,7 +18,7 @@
 | 组件 | 要求 |
 |------|------|
 | Zotero | 7.0–10.0（Zotero 8–10 使用官方 MenuManager；Zotero 7 使用兼容菜单路径） |
-| paper-fetch CLI | 已安装并在 PATH 中，或位于 `/opt/homebrew/bin/paper-fetch`；兼容 4.x / 5.x，建议 ≥ 5.3（4.0 起浏览器后端仅支持 Camoufox，旧版 CloakBrowser 已移除；5.2 起新增 Taylor & Francis Online provider） |
+| paper-fetch CLI | 已安装并在 PATH 中，或位于 `/opt/homebrew/bin/paper-fetch`；兼容 4.x / 5.x，建议 ≥ 5.5（5.4 起可首次按需准备 Camoufox；5.5 新增精确抓取来源并修复公式与资产链接） |
 | 操作系统 | macOS / Linux（需要 zsh） |
 
 ### 安装 paper-fetch
@@ -95,7 +95,7 @@ SQLite 数据库或本地 HTTP API，因此不受 Zotero 10 对这些接口的�
 
 | 步骤 | 模式 | 超时 | 说明 |
 |------|------|------|------|
-| 1 | 完整模式 (`fetch --artifact-mode markdown-assets --asset-profile body`) | 180秒 | 尝试通过浏览器获取 PDF 和正文图片资源（Camoufox 首次运行需下载浏览器运行时，故放宽超时）|
+| 1 | 完整模式 (`fetch --artifact-mode markdown-assets --asset-profile body`) | 1080秒 | 尝试通过浏览器获取 PDF 和正文图片资源；paper-fetch 5.4+ 首次运行可能自动安装或修复 Camoufox，最多需要较长准备时间，可随时取消 |
 | 2 | 降级模式 (`fetch --artifact-mode none`) | 60秒 | 跳过浏览器，快速获取 Markdown 全文 |
 
 ### 下载结果
@@ -146,7 +146,7 @@ Zotero_paper_download/
 逐条处理：
   1. 提取 DOI/URL/标题
   2. 创建临时目录
-  3. 调用 paper-fetch CLI（完整模式，180s 超时）
+  3. 调用 paper-fetch CLI（完整模式，1080s 外层超时；首次 Camoufox 自动准备可能耗时较长）
   4. 如果完整模式失败 → 降级到无浏览器模式（60s 超时）
   5. 查找生成的 PDF/Markdown（优先 PDF）
   6. 若 paper-fetch 无产物，等待并识别 Zotero 已有 OA PDF，再调用 Zotero 原生可用全文解析器
@@ -210,7 +210,7 @@ Integrates the paper-fetching capability of [paperfetch](https://github.com/doux
 | Component | Requirement |
 |-----------|-------------|
 | Zotero | 7.0–10.0 (official MenuManager on Zotero 8–10; compatibility menu path on Zotero 7) |
-| paper-fetch CLI | Installed and on PATH, or at `/opt/homebrew/bin/paper-fetch`; compatible with 4.x / 5.x, ≥ 5.3 recommended (4.0 supports only the Camoufox browser backend; the legacy CloakBrowser backend was removed; 5.2 added the Taylor & Francis Online provider) |
+| paper-fetch CLI | Installed and on PATH, or at `/opt/homebrew/bin/paper-fetch`; compatible with 4.x / 5.x, ≥ 5.5 recommended (5.4 added on-demand Camoufox preparation; 5.5 added precise acquisition provenance and formula/asset-link fixes) |
 | OS | macOS / Linux (requires zsh) |
 
 ### Install paper-fetch
@@ -283,7 +283,7 @@ The plugin uses a two-step fallback strategy:
 
 | Step | Mode | Timeout | Description |
 |------|------|---------|-------------|
-| 1 | Full mode (`fetch --artifact-mode markdown-assets --asset-profile body`) | 180s | Attempts to get PDF and body image assets via browser (Camoufox may download its browser runtime on first run, hence the longer timeout) |
+| 1 | Full mode (`fetch --artifact-mode markdown-assets --asset-profile body`) | 1080s | Attempts to get PDF and body image assets; paper-fetch 5.4+ may install or repair Camoufox on first use, which can take longer and remains cancellable |
 | 2 | Fallback mode (`fetch --artifact-mode none`) | 60s | Skips browser, quickly gets Markdown full text |
 
 ### Download Results
@@ -334,7 +334,7 @@ Progress dialog appears
 Process each item:
   1. Extract DOI/URL/Title
   2. Create temp directory
-  3. Call paper-fetch CLI (full mode, 180s timeout)
+  3. Call paper-fetch CLI (full mode, 1080s outer timeout; first-use Camoufox preparation may take longer)
   4. If full mode fails → fallback to no-browser mode (60s timeout)
   5. Find generated PDF/Markdown (PDF preferred)
   6. Import as Zotero attachment
