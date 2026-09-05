@@ -1,3 +1,88 @@
+# Skill Fulltext Downloader — Zotero 7–10
+
+## 安装和使用（0.8.0）
+
+### 要安装哪些组件？
+
+**XPI 是 Zotero 插件；Paper-fetch 和 ScanSci 是另外安装的本机命令行程序。**
+无需安装 Codex/Claude 的 SKILL.md 或配置 MCP 服务，Zotero 直接调用 CLI。
+XPI 不打包 Python 和浏览器。只安装 XPI 时，缺少的引擎会失败并进入下一级，Zotero 保底仍保留。
+
+| 组件 | 用途 | 检查命令 |
+|---|---|---|
+| Zotero 7–10 + 本 XPI | 菜单、下载调度、附件导入 | 工具 → 插件 |
+| Paper-fetch CLI | 第一级，PDF 或 Markdown | `paper-fetch --version` |
+| ScanSci PDF CLI | 第二级，PDF 和登录会话 | `scansci-pdf get --help` |
+| ScanSci 浏览器后端 | 出版社/机构交互登录 | `scansci-pdf browser-doctor` |
+
+### 安装依赖
+
+Paper-fetch 请使用[官方 Release](https://github.com/Dictation354/paper-fetch-skill/releases)中对应操作系统、CPU 与 Python ABI 的安装包，并遵循包内安装说明。
+例如 macOS Apple Silicon + Python 3.13 对应 `macos-arm64-cp313`，不要混用不同 Python ABI。
+本机已安装 6.1.5；本插件仍保留 4.x/5.x 的 fetch 参数。
+
+ScanSci 推荐通过独立工具环境安装（先安装 uv）：
+
+```sh
+uv tool install scansci-pdf --with patchright --with pycryptodome
+scansci-pdf check
+scansci-pdf browser-doctor
+scansci-pdf login --help
+```
+
+如已安装，可用 `uv tool upgrade scansci-pdf` 更新；浏览器缺失时按 `browser-doctor` 的提示准备。
+登录命令需支持 `--login-type cookies --url`，下载命令需支持 `get --output --strategy --no-bibtex`。
+插件搜索 `~/.local/bin`、`/opt/homebrew/bin`、`/usr/local/bin`；Paper-fetch 优先使用 `/opt/homebrew/bin/paper-fetch`。
+**当前进程调用依赖 `/bin/zsh`，本次仅验证 macOS；不声明 Windows 可用。**
+
+### 安装 XPI
+
+从本仓库 Release 下载 `skill-fulltext-zotero.xpi`，在 Zotero「工具 → 插件 → 齿轮 → 从文件安装插件」选择它。
+已有版本由固定更新清单自动升级，具体取决于 Zotero 的插件自动更新设置。
+
+### 下载顺序
+
+选中有 DOI 的题录，右键「Skill 下载全文」。
+
+1. 已有有效 PDF：直接完成，避免重复附件。
+2. Paper-fetch 完整模式；失败或无文件时尝试其原有降级模式。
+3. 两者仍失败：调用 ScanSci（`legal_only`，OA/出版社/机构渠道）。
+4. ScanSci 仍失败：等待原有附件下载，再调用 Zotero 原生 OA 保底。
+
+Paper-fetch 完整模式与 ScanSci 各自外层预算为 18 分钟，Paper-fetch 降级为 60 秒。
+网络、订阅权限和登录状态会影响结果；全链失败仍会显示错误。
+
+### 需要登录时
+
+ScanSci 没有拿到 PDF 且输出登录/付费墙提示时，插件弹出“ScanSci 登录”。
+点击确认后，在专用浏览器里选择出版社账号或“通过机构访问”，由你完成密码、验证码及订阅操作。
+完成后关闭登录页，工具保存 Cookie，插件重试当前题录一次。
+点击取消登录提示则继续 Zotero 保底；点击下载窗口的取消则停止任务。
+**有 Cookie 不等于有全文权限，最终以下载到有效 PDF 为成功标准；插件不代购、不保存密码。**
+
+### 会话保存与清除
+
+登录会话仅保存在当前 Zotero Profile 的 `skill-fulltext-scansci` 目录；不导入其他浏览器或全局 ScanSci Cookie。
+目录权限 0700、配置文件 0600、CLI umask 077；Cookie 是本机文件，并非加密保险库，请勿分享该目录或把它同步到公开仓库。
+同一 Profile 后续使用复用会话，过期时重新提示登录。
+Zotero 8–10 的题录右键菜单包含“清除 ScanSci 登录状态”；确认后删除专用会话与缓存，已导入 Zotero 的附件保留。
+该命令在下载运行期间禁用。Zotero 7 的旧式菜单当前仅提供下载入口。
+
+### 故障排查
+
+- 缺 CLI：在终端执行上述检查命令；只装 agent skill 不会自动满足 Zotero 的 CLI 依赖。
+- 登录窗口启动失败：运行 `scansci-pdf browser-doctor` 检查浏览器依赖。
+- 登录后仍失败：确认机构订阅、网络与会话权限；插件仍会尝试 Zotero 保底。
+- ScanSci 日志位于该次临时工作目录的 `scansci/scansci.log`，登录诊断单独保存在 `scansci-login.log`；分享前检查内容是否含敏感信息。
+- 清除会话后需重新登录，不会删除已导入附件。
+
+### 验证范围
+
+单元测试覆盖 ScanSci 成功、无 PDF、取消、登录确认/重试和定向清除。
+Zotero 10 内使用受控返回值验证三级分派，另检查实际本机 CLI 启动；这不等于所有出版社或机构登录端到端验证。
+
+---
+
 # Skill Fulltext Downloader for Zotero
 
 将 [paperfetch](https://github.com/douxy1994/paperfetch) 的论文全文抓取能力集成到 Zotero，实现一键下载全文并自动导入为题录附件。
@@ -18,7 +103,7 @@
 | 组件 | 要求 |
 |------|------|
 | Zotero | 7.0–10.0（Zotero 8–10 使用官方 MenuManager；Zotero 7 使用兼容菜单路径） |
-| paper-fetch CLI | 已安装并在 PATH 中，或位于 `/opt/homebrew/bin/paper-fetch`；兼容 4.x / 5.x，建议 ≥ 5.5（5.4 起可首次按需准备 Camoufox；5.5 新增精确抓取来源并修复公式与资产链接） |
+| paper-fetch CLI | 已安装并在 PATH 中，或位于 `/opt/homebrew/bin/paper-fetch`；兼容 4.x / 5.x / 6.x，建议使用最新稳定版（本次验证为 6.1.5） |
 | 操作系统 | macOS / Linux（需要 zsh） |
 
 ### 安装 paper-fetch
@@ -210,7 +295,7 @@ Integrates the paper-fetching capability of [paperfetch](https://github.com/doux
 | Component | Requirement |
 |-----------|-------------|
 | Zotero | 7.0–10.0 (official MenuManager on Zotero 8–10; compatibility menu path on Zotero 7) |
-| paper-fetch CLI | Installed and on PATH, or at `/opt/homebrew/bin/paper-fetch`; compatible with 4.x / 5.x, ≥ 5.5 recommended (5.4 added on-demand Camoufox preparation; 5.5 added precise acquisition provenance and formula/asset-link fixes) |
+| paper-fetch CLI | Installed and on PATH, or at `/opt/homebrew/bin/paper-fetch`; compatible with 4.x / 5.x / 6.x; the latest stable version is recommended (6.1.5 verified here) |
 | OS | macOS / Linux (requires zsh) |
 
 ### Install paper-fetch

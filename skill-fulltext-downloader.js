@@ -48,6 +48,10 @@ var SkillFulltextDownloader = {
           var items = ((ctx && ctx.items) || []).filter(function (i) { return i && i.isRegularItem(); });
           if (items.length) self._doAll(items);
         }
+      }, {
+        menuType: "menuitem", l10nID: "skill-scansci-clear-session",
+        onShowing: function (_evt, ctx) { ctx.setEnabled(!self.isRunning && !self.activeProcess); },
+        onCommand: function () { self._clearScanSciSession().catch(Zotero.logError); }
       }]
     });
     Zotero.debug("Skill Fulltext: registered MenuManager item menu");
@@ -332,7 +336,15 @@ var SkillFulltextDownloader = {
         if (self.cancelled) throw fetchErr;
         // Zotero may still be finishing its own OA attachment download after
         // paper-fetch exits. Observe that state before starting another request.
-        return self._waitForExistingPDFAttachment(item, 20000, 1000).then(function (existing) {
+        return self._tryScanSci(item, query, workDir).catch(function (error) {
+          if (self.cancelled) throw error;
+          Zotero.debug("ScanSci fallback failed: " + error);
+          return null;
+        }).then(function (scanAttachment) {
+          if (scanAttachment) return scanAttachment;
+          if (self.cancelled) throw new Error("下载已取消");
+          return self._waitForExistingPDFAttachment(item, 20000, 1000);
+        }).then(function (existing) {
           if (existing) return existing;
           return self._tryZoteroAvailableFile(item);
         }).then(function (attachment) {
@@ -345,6 +357,84 @@ var SkillFulltextDownloader = {
         });
       });
     });
+  },
+
+  // ScanSci keeps its own session store, independent of the user's global config.
+  _scanSciSessionDir: function () {
+    return PathUtils.join(Services.dirsvc.get("ProfD", Ci.nsIFile).path, "skill-fulltext-scansci");
+  },
+
+  _scanSciCommand: async function (args, workDir) {
+    if (this.cancelled) throw new Error("下载已取消");
+    var session = this._scanSciSessionDir();
+    await IOUtils.makeDirectory(session, { createAncestors: true, permissions: 448 });
+    await IOUtils.setPermissions(session, 448);
+    var configPath = PathUtils.join(session, "config.json");
+    if (!(await IOUtils.exists(configPath))) {
+      await IOUtils.writeUTF8(configPath, JSON.stringify({
+        download_strategy: "legal_only", scihub_enabled: false,
+        auto_relogin: false, progress_bar_auto: false, browser_headless: true,
+        cache_dir: PathUtils.join(session, "cache")
+      }));
+    }
+    await IOUtils.setPermissions(configPath, 384);
+    var log = PathUtils.join(workDir, args[0] === "login" ? "scansci-login.log" : "scansci.log");
+    // Positional arguments prevent DOI/URL shell interpolation. umask protects cookies.
+    var script = [
+      'set -eu; umask 077',
+      'export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"',
+      'export SCANSCI_PDF_DATA_DIR="$1"; LOG="$2"; shift 2',
+      'BIN="$(command -v scansci-pdf || true)"',
+      '[ -n "$BIN" ] || { echo "ScanSci CLI missing" >"$LOG"; exit 127; }',
+      'exec "$BIN" "$@" >"$LOG" 2>&1'
+    ].join("\n");
+    await this._runProcess("/bin/zsh", ["-lc", script, "skill-scansci", session, log].concat(args), 1080000);
+  },
+
+  _tryScanSci: async function (item, query, workDir) {
+    if (this.cancelled) return null;
+    var dir = PathUtils.join(workDir, "scansci");
+    await IOUtils.makeDirectory(dir, { createAncestors: true });
+    var args = ["get", query, "--output", dir, "--strategy", "legal_only", "--no-bibtex"];
+    try { await this._scanSciCommand(args, dir); }
+    catch (e) { if (this.cancelled) return null; }
+    var file = await this._pickAttachmentFile(dir);
+    if (!file) {
+      var logPath = PathUtils.join(dir, "scansci.log");
+      var log = await IOUtils.exists(logPath) ? await IOUtils.readUTF8(logPath) : "";
+      if (/paywall|login_required|not.entitled|需要登录|机构登录|scansci-pdf login/i.test(log)) {
+        var accepted = Services.prompt.confirm(Zotero.getMainWindow(), "ScanSci 登录",
+          "该文献可能需要出版社或机构登录。打开专用浏览器登录并在本机记住会话？账号和支付操作由你完成，关闭登录页后重试。点击取消使用 Zotero 保底下载。");
+        if (accepted && !this.cancelled) {
+          var url = (item.getField("url") || "").trim();
+          var doi = (item.getField("DOI") || "").trim();
+          if (doi) url = "https://doi.org/" + doi;
+          if (/^https:\/\//i.test(url)) {
+            try {
+              await this._scanSciCommand(["login", "--login-type", "cookies", "--url", url], dir);
+              if (!this.cancelled) await this._scanSciCommand(args, dir);
+              file = await this._pickAttachmentFile(dir);
+            } catch (e) { if (this.cancelled) return null; }
+          }
+        }
+      }
+    }
+    if (this.cancelled || !file || !file.toLowerCase().endsWith(".pdf")) return null;
+    var bytes = await IOUtils.read(file, { maxBytes: 5 });
+    if (String.fromCharCode.apply(null, bytes) !== "%PDF-") return null;
+    var existing = await this._findExistingPDFAttachment(item);
+    if (existing) return existing;
+    return Zotero.Attachments.importFromFile({
+      file: file, parentItemID: item.id, title: "ScanSci 全文", contentType: "application/pdf"
+    });
+  },
+
+  _clearScanSciSession: async function () {
+    if (this.isRunning || this.activeProcess) return;
+    if (!Services.prompt.confirm(Zotero.getMainWindow(), "清除 ScanSci 登录状态",
+      "清除本插件专用的 ScanSci 会话和缓存？不影响 Zotero 附件或全局 ScanSci 配置。")) return;
+    var dir = this._scanSciSessionDir();
+    if (await IOUtils.exists(dir)) await IOUtils.remove(dir, { recursive: true });
   },
 
   _runPaperFetch: function (
@@ -387,7 +477,7 @@ var SkillFulltextDownloader = {
     }).then(function (hasFile) {
       if (hasFile) return true;
       throw new Error("\u5B8C\u6574\u6A21\u5F0F\u672A\u751F\u6210\u6587\u4EF6");
-    }, function (fullErr) {
+    }).catch(function (fullErr) {
       if (self.cancelled) throw fullErr;
       // Fallback: no-browser mode
       return self._runProcess("/bin/zsh", [
