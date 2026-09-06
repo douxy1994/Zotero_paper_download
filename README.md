@@ -1,6 +1,6 @@
 # Skill Fulltext Downloader — Zotero 7–10
 
-## 安装和使用（0.8.0）
+## 安装和使用（0.8.1）
 
 ### 要安装哪些组件？
 
@@ -48,6 +48,8 @@ scansci-pdf login --help
 2. Paper-fetch 完整模式；失败或无文件时尝试其原有降级模式。
 3. 两者仍失败：调用 ScanSci（`legal_only`，OA/出版社/机构渠道）。
 4. ScanSci 仍失败：等待原有附件下载，再调用 Zotero 原生 OA 保底。
+
+任何后端返回 PDF 后，插件都会提取前三页文本，以题录 DOI 或题名关键词核对身份。身份不匹配的文件不会导入，并继续下一级下载工具。
 
 Paper-fetch 完整模式与 ScanSci 各自外层预算为 18 分钟，Paper-fetch 降级为 60 秒。
 网络、订阅权限和登录状态会影响结果；全链失败仍会显示错误。

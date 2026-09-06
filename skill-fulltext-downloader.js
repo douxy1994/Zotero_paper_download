@@ -8,6 +8,7 @@ var SkillFulltextDownloader = {
   dialog: null,
   activeProcess: null,
   activeProcessCancel: null,
+  lastScanSciError: "",
 
   init: function (params) {
     this.id = params.id;
@@ -327,10 +328,15 @@ var SkillFulltextDownloader = {
         if (!file) throw new Error("paper-fetch \u672A\u751F\u6210\u53EF\u5BFC\u5165\u6587\u4EF6");
         var contentType = file.toLowerCase().endsWith(".pdf") ? "application/pdf" : "text/markdown";
         var title = contentType === "application/pdf" ? "Skill \u4E0B\u8F7D\u5168\u6587" : "Skill \u4E0B\u8F7D\u5168\u6587 (Markdown)";
+        var validation = contentType === "application/pdf"
+          ? self._validatePDFIdentity(file, item)
+          : Promise.resolve(true);
+        return validation.then(function () {
         return Zotero.Attachments.importFromFile({
           file: file, parentItemID: item.id, title: title,
           fileBaseName: Zotero.Attachments.getFileBaseNameFromItem(item, { attachmentTitle: title }),
           contentType: contentType
+        });
         });
       }).catch(function (fetchErr) {
         if (self.cancelled) throw fetchErr;
@@ -338,6 +344,7 @@ var SkillFulltextDownloader = {
         // paper-fetch exits. Observe that state before starting another request.
         return self._tryScanSci(item, query, workDir).catch(function (error) {
           if (self.cancelled) throw error;
+          self.lastScanSciError = error.message || String(error);
           Zotero.debug("ScanSci fallback failed: " + error);
           return null;
         }).then(function (scanAttachment) {
@@ -352,7 +359,7 @@ var SkillFulltextDownloader = {
           return self._paperFetchFailureDetail([
             fallbackResultJSON, resultJSON, fallbackStderrLog, stderrLog
           ]).then(function (detail) {
-            throw new Error(detail || fetchErr.message || "\u672A\u627E\u5230\u53EF\u7528\u5168\u6587");
+            throw new Error(self.lastScanSciError || detail || fetchErr.message || "\u672A\u627E\u5230\u53EF\u7528\u5168\u6587");
           });
         });
       });
@@ -393,6 +400,7 @@ var SkillFulltextDownloader = {
 
   _tryScanSci: async function (item, query, workDir) {
     if (this.cancelled) return null;
+    this.lastScanSciError = "";
     var dir = PathUtils.join(workDir, "scansci");
     await IOUtils.makeDirectory(dir, { createAncestors: true });
     var args = ["get", query, "--output", dir, "--strategy", "legal_only", "--no-bibtex"];
@@ -420,13 +428,59 @@ var SkillFulltextDownloader = {
       }
     }
     if (this.cancelled || !file || !file.toLowerCase().endsWith(".pdf")) return null;
-    var bytes = await IOUtils.read(file, { maxBytes: 5 });
-    if (String.fromCharCode.apply(null, bytes) !== "%PDF-") return null;
+    await this._validatePDFIdentity(file, item);
     var existing = await this._findExistingPDFAttachment(item);
     if (existing) return existing;
     return Zotero.Attachments.importFromFile({
       file: file, parentItemID: item.id, title: "ScanSci 全文", contentType: "application/pdf"
     });
+  },
+
+  _validatePDFIdentity: async function (file, item) {
+    var header = await IOUtils.read(file, { maxBytes: 5 });
+    if (String.fromCharCode.apply(null, header) !== "%PDF-") {
+      throw new Error("\u4E0B\u8F7D\u7ED3\u679C\u4E0D\u662F PDF");
+    }
+    if (!Zotero.PDFWorker || !Zotero.PDFWorker._query) {
+      throw new Error("PDF \u8EAB\u4EFD\u9A8C\u8BC1\u4E0D\u53EF\u7528");
+    }
+    var raw = await IOUtils.read(file);
+    var buffer = new Uint8Array(raw).buffer;
+    var result;
+    try {
+      if (Zotero.PDFWorker._init) Zotero.PDFWorker._init();
+      result = await Zotero.PDFWorker._query(
+        "pdf.getFulltext", { buf: buffer, maxPages: 3 }, [buffer]
+      );
+    } catch (e) {
+      throw new Error("PDF \u6587\u672C\u63D0\u53D6\u5931\u8D25: " + (e.message || String(e)));
+    }
+    var text = String(result && result.text || "").slice(0, 30000).toLowerCase();
+    if (!text.trim()) throw new Error("PDF \u524D\u4E09\u9875\u6CA1\u6709\u53EF\u9A8C\u8BC1\u6587\u672C");
+
+    var doi = String(item.getField("DOI") || "").trim().toLowerCase()
+      .replace(/^https?:\/\/(?:dx\.)?doi\.org\//, "");
+    if (doi && text.indexOf(doi) !== -1) return true;
+
+    var normalize = function (value) {
+      return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    };
+    var stop = new Set(["the", "and", "for", "with", "from", "into", "this", "that", "river"]);
+    var tokens = Array.from(new Set(normalize(item.getField("title")).split(" ").filter(function (token) {
+      return token.length >= 4 && !stop.has(token);
+    })));
+    var normalizedText = " " + normalize(text) + " ";
+    var matched = tokens.filter(function (token) {
+      return normalizedText.indexOf(" " + token + " ") !== -1;
+    }).length;
+    var score = tokens.length ? matched / tokens.length : 0;
+    if (tokens.length >= 4 && score >= 0.7) return true;
+
+    var found = text.match(/10\.\d{4,9}\/[-._;()/:a-z0-9]+/i);
+    if (found) {
+      throw new Error("PDF DOI \u4E0D\u5339\u914D: " + found[0].replace(/[.,;]+$/, ""));
+    }
+    throw new Error("PDF \u9898\u540D\u5339\u914D\u5EA6\u4E0D\u8DB3 (" + Math.round(score * 100) + "%)");
   },
 
   _clearScanSciSession: async function () {
