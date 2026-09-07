@@ -9,8 +9,13 @@ TMP_BUILD=$(mktemp -d "${TMPDIR:-/tmp}/skill-fulltext-zotero-${VERSION}.XXXXXX")
 TMP_XPI="$TMP_BUILD/skill-fulltext-zotero.xpi"
 trap 'python3 -c "import shutil,sys; shutil.rmtree(sys.argv[1], ignore_errors=True)" "$TMP_BUILD"' EXIT
 
+python3 - <<'PYCODE'
+import json
+from pathlib import Path
+Path("content/scansci-login-source.js").write_text("var ScanSciLoginSource = " + json.dumps(Path("content/scansci-login.py").read_text(), ensure_ascii=False) + ";\n")
+PYCODE
 zip -X -q -r "$TMP_XPI" \
-  manifest.json bootstrap.js skill-fulltext-downloader.js README.md locale content
+  manifest.json bootstrap.js skill-fulltext-downloader.js README.md locale content/icons content/progress.xhtml content/scansci-login.py content/scansci-login-source.js
 
 HASH=$(shasum -a 256 "$TMP_XPI" | awk '{print $1}')
 cp "$TMP_XPI" skill-fulltext-zotero.xpi

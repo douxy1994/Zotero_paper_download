@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Skill Fulltext Downloader",
-  "version": "0.8.1",
+  "version": "0.8.5",
   "description": "Add a Zotero item context-menu action that downloads full text through paper-fetch and imports it as an item attachment.",
   "author": "douxy1994",
   "homepage_url": "https://github.com/douxy1994/paperfetch",

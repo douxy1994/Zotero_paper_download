@@ -114,113 +114,64 @@ var SkillFulltextDownloader = {
   // ===== Progress Dialog =====
 
   _doAll: function (items) {
+    if (this.isRunning) return;
     var self = this;
     self.isRunning = true;
     self.cancelled = false;
-
-    var win = Zotero.getMainWindow();
-    self.dialog = win.openDialog(
-      "about:blank", "skill-fulltext-dialog",
-      "chrome,centerscreen,resizable=yes,width=520,height=420,maxwidth=520,maxheight=420,modal=no,dependent=no"
-    );
-
-    self.dialog.addEventListener("load", function () {
-      self._buildDialog(self.dialog, items);
-      self._process(items, 0);
+    self.completed = 0;
+    var dlg;
+    try {
+      dlg = Zotero.getMainWindow().openDialog(
+        "chrome://skill-fulltext/content/progress.xhtml", "skill-fulltext-dialog",
+        "chrome,centerscreen,resizable=yes,width=660,height=460,dialog=no"
+      );
+      self.dialog = dlg;
+    } catch (e) { self.isRunning = false; throw e; }
+    var started = false;
+    var start = function () {
+      if (started || dlg.closed) return;
+      if (!dlg.document.getElementById("sf-root")) return;
+      started = true;
+      dlg.removeEventListener("load", start);
+      try {
+        self._buildDialog(dlg, items);
+        self._process(items, 0);
+      } catch (e) {
+        self.isRunning = false;
+        Zotero.logError(e);
+        var status = dlg.document.getElementById("sf-status");
+        if (status) status.textContent = "初始化失败：" + e.message;
+      }
+    };
+    dlg.addEventListener("load", start);
+    dlg.addEventListener("unload", function (event) {
+      if (!started || event.target !== dlg.document) return;
+      if (self.dialog === dlg) {
+        if (self.isRunning) self._cancel();
+        self.dialog = null;
+      }
     });
-    if (self.dialog.document.readyState === "complete") {
-      self._buildDialog(self.dialog, items);
-      self._process(items, 0);
-    }
+    if (dlg.document.readyState === "complete") start();
   },
 
   _buildDialog: function (dlg, items) {
     var doc = dlg.document;
-    doc.documentElement.setAttribute("xmlns", "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul");
-    doc.documentElement.innerHTML = "";
-
-    var styleEl = doc.createElement("style");
-    styleEl.textContent = [
-      ":root { --bg: -moz-Dialog; --fg: -moz-DialogText; --border: ThreeDShadow; --item-bg: -moz-Field; --item-fg: -moz-FieldText; }",
-      "@media (prefers-color-scheme: dark) { :root { --bg: #2d2d2d; --fg: #e0e0e0; --border: #555; --item-bg: #1e1e1e; --item-fg: #e0e0e0; } }"
-    ].join("\n");
-    doc.documentElement.appendChild(styleEl);
-
     var self = this;
-    var vbox = doc.createXULElement("vbox");
-    vbox.setAttribute("style", "padding:16px;font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:13px;background:var(--bg);color:var(--fg);height:100%;box-sizing:border-box;");
-
-    var titleEl = doc.createXULElement("label");
-    titleEl.setAttribute("value", "Skill \u4E0B\u8F7D\u5168\u6587");
-    titleEl.setAttribute("style", "font-size:16px;font-weight:bold;margin-bottom:12px;");
-    vbox.appendChild(titleEl);
-
-    var progRow = doc.createXULElement("hbox");
-    progRow.setAttribute("style", "margin-bottom:8px;align-items:center;gap:8px;");
-    var progressbar = doc.createXULElement("progressmeter");
-    progressbar.setAttribute("id", "sf-progress");
-    progressbar.setAttribute("mode", "determined");
-    progressbar.setAttribute("value", "0");
-    progressbar.setAttribute("style", "flex:1;height:22px;");
-    progRow.appendChild(progressbar);
-    var progressLabel = doc.createXULElement("label");
-    progressLabel.setAttribute("id", "sf-progress-label");
-    progressLabel.setAttribute("value", "0 / " + items.length);
-    progressLabel.setAttribute("style", "min-width:60px;");
-    progRow.appendChild(progressLabel);
-    vbox.appendChild(progRow);
-
-    var statusLabel = doc.createXULEment ? doc.createXULElement("label") : doc.createElement("label");
-    statusLabel.setAttribute("id", "sf-status");
-    statusLabel.setAttribute("value", "\u51C6\u5907\u4E0B\u8F7D...");
-    statusLabel.setAttribute("style", "margin-bottom:8px;opacity:0.7;");
-    vbox.appendChild(statusLabel);
-
-    var listbox = doc.createXULElement("vbox");
-    listbox.setAttribute("id", "sf-list");
-    listbox.setAttribute("style", "flex:1;overflow-y:auto;max-height:280px;border:1px solid var(--border);border-radius:4px;background:var(--item-bg);color:var(--item-fg);padding:4px;");
-
-    for (var i = 0; i < items.length; i++) {
-      var row = doc.createXULElement("hbox");
-      row.setAttribute("id", "sf-item-" + i);
-      row.setAttribute("style", "padding:6px 8px;border-bottom:1px solid rgba(128,128,128,0.2);align-items:center;gap:8px;flex-shrink:0;");
-      var icon = doc.createXULElement("label");
-      icon.setAttribute("id", "sf-icon-" + i);
-      icon.setAttribute("value", "\u23F3");
-      icon.setAttribute("style", "min-width:20px;text-align:center;font-size:14px;");
-      row.appendChild(icon);
-      var itemTitle = items[i].getField("title") || "Unknown";
-      if (itemTitle.length > 45) itemTitle = itemTitle.slice(0, 45) + "...";
-      var label = doc.createXULElement("label");
-      label.setAttribute("value", itemTitle);
-      label.setAttribute("style", "flex:1;overflow:hidden;");
-      label.setAttribute("crop", "end");
-      label.setAttribute("tooltiptext", items[i].getField("title") || "");
-      row.appendChild(label);
-      var status = doc.createXULElement("label");
-      status.setAttribute("id", "sf-status-" + i);
-      status.setAttribute("value", "\u7B49\u5F85\u4E2D");
-      status.setAttribute("style", "font-size:11px;opacity:0.6;min-width:50px;");
-      row.appendChild(status);
-      listbox.appendChild(row);
-    }
-    vbox.appendChild(listbox);
-
-    var btnRow = doc.createXULElement("hbox");
-    btnRow.setAttribute("style", "margin-top:12px;justify-content:flex-end;gap:8px;");
-    var cancelBtn = doc.createXULElement("button");
-    cancelBtn.setAttribute("id", "sf-cancel");
-    cancelBtn.setAttribute("label", "\u53D6\u6D88");
-    cancelBtn.addEventListener("command", function () { self._cancel(); });
-    btnRow.appendChild(cancelBtn);
-    var closeBtn = doc.createXULElement("button");
-    closeBtn.setAttribute("id", "sf-close");
-    closeBtn.setAttribute("label", "\u5173\u95ED");
-    closeBtn.setAttribute("disabled", "true");
-    closeBtn.addEventListener("command", function () { dlg.close(); });
-    btnRow.appendChild(closeBtn);
-    vbox.appendChild(btnRow);
-    doc.documentElement.appendChild(vbox);
+    var create = function (tag) { return doc.createElementNS("http://www.w3.org/1999/xhtml", tag); };
+    var list = doc.getElementById("sf-list");
+    list.replaceChildren();
+    items.forEach(function (item, i) {
+      var row = create("div"); row.className = "item";
+      var icon = create("span"); icon.id = "sf-icon-" + i; icon.textContent = "⏳";
+      var title = create("span"); title.className = "title";
+      title.textContent = item.getField("title") || "Untitled";
+      title.title = title.textContent;
+      var status = create("span"); status.id = "sf-status-" + i; status.textContent = "等待中";
+      row.append(icon, title, status); list.appendChild(row);
+    });
+    doc.getElementById("sf-cancel").addEventListener("click", function () { self._cancel(); });
+    doc.getElementById("sf-close").addEventListener("click", function () { dlg.close(); });
+    self._updateProgress(0, items.length);
   },
 
   _cancel: function () {
@@ -229,68 +180,56 @@ var SkillFulltextDownloader = {
     var dlg = this.dialog;
     if (!dlg) return;
     var btn = dlg.document.getElementById("sf-cancel");
-    if (btn) { btn.setAttribute("disabled", "true"); btn.setAttribute("label", "\u6B63\u5728\u53D6\u6D88..."); }
+    if (btn) { btn.disabled = true; btn.textContent = "正在取消…"; }
   },
 
   _updateItem: function (i, state, msg) {
     var dlg = this.dialog;
-    if (!dlg) return;
+    if (!dlg || dlg.closed) return;
     var icon = dlg.document.getElementById("sf-icon-" + i);
     var status = dlg.document.getElementById("sf-status-" + i);
     if (!icon || !status) return;
-    if (state === "downloading") {
-      icon.setAttribute("value", "\uD83D\uDD04");
-      status.setAttribute("value", "\u4E0B\u8F7D\u4E2D");
-      status.setAttribute("style", "font-size:11px;color:#1976d2;min-width:50px;");
-    } else if (state === "success") {
-      icon.setAttribute("value", "\u2705");
-      status.setAttribute("value", "\u5B8C\u6210");
-      status.setAttribute("style", "font-size:11px;color:#388e3c;min-width:50px;");
-    } else if (state === "error") {
-      icon.setAttribute("value", "\u274C");
-      status.setAttribute("value", (msg || "\u5931\u8D25").slice(0, 36));
-      status.setAttribute("tooltiptext", msg || "\u5931\u8D25");
-      status.setAttribute("style", "font-size:11px;color:#d32f2f;min-width:50px;");
-    }
+    icon.textContent = {downloading:"↻", success:"✓", error:"✗"}[state] || "⏳";
+    status.textContent = msg || {downloading:"下载中",success:"完成",error:"失败"}[state];
+    status.title = status.textContent;
+    status.className = state;
   },
 
   _updateProgress: function (done, total) {
+    this.completed = done;
     var dlg = this.dialog;
-    if (!dlg) return;
-    var pct = total > 0 ? Math.round((done / total) * 100) : 0;
-    var bar = dlg.document.getElementById("sf-progress");
-    var label = dlg.document.getElementById("sf-progress-label");
-    var status = dlg.document.getElementById("sf-status");
-    if (bar) bar.setAttribute("value", String(pct));
-    if (label) label.setAttribute("value", done + " / " + total);
-    if (status) status.setAttribute("value", "\u5DF2\u4E0B\u8F7D " + done + " / " + total + " \u7BC7");
+    if (!dlg || dlg.closed) return;
+    var doc = dlg.document;
+    doc.getElementById("sf-progress").max = total || 1;
+    doc.getElementById("sf-progress").value = done;
+    doc.getElementById("sf-progress-label").textContent = done + " / " + total;
+    doc.getElementById("sf-status").textContent = "已处理 " + done + " / " + total;
   },
 
   _finishDialog: function () {
     var dlg = this.dialog;
-    if (!dlg) return;
-    var cancelBtn = dlg.document.getElementById("sf-cancel");
-    var closeBtn = dlg.document.getElementById("sf-close");
-    var status = dlg.document.getElementById("sf-status");
-    if (cancelBtn) { cancelBtn.setAttribute("disabled", "true"); cancelBtn.setAttribute("label", "\u5DF2\u5B8C\u6210"); }
-    if (closeBtn) closeBtn.removeAttribute("disabled");
-    if (status) status.setAttribute("value", "\u5168\u90E8\u5B8C\u6210\uFF01");
+    if (!dlg || dlg.closed) return;
+    dlg.document.getElementById("sf-cancel").disabled = true;
+    dlg.document.getElementById("sf-close").disabled = false;
+    dlg.document.getElementById("sf-status").textContent = this.cancelled ? "任务已取消" : "处理结束（逐项结果见列表）";
   },
 
   _process: function (items, i) {
     var self = this;
     if (self.cancelled || i >= items.length) {
+      self._updateProgress(i, items.length);
       self.isRunning = false;
       self._finishDialog();
       return;
     }
+    self.currentItemIndex = i;
     self._updateItem(i, "downloading");
     self._updateProgress(i, items.length);
     self._one(items[i]).then(function () {
       self._updateItem(i, "success");
       self._process(items, i + 1);
     }, function (err) {
-      self._updateItem(i, "error", err.message || String(err));
+      self._updateItem(i, "error", self.cancelled ? "已取消" : err.message || String(err));
       self._process(items, i + 1);
     });
   },
@@ -385,17 +324,26 @@ var SkillFulltextDownloader = {
       }));
     }
     await IOUtils.setPermissions(configPath, 384);
+    var loginHelper = "";
+    if (args[0] === "login") {
+      loginHelper = PathUtils.join(session, "scansci-login.py");
+      var helperScope = {};
+      Services.scriptloader.loadSubScript("chrome://skill-fulltext/content/scansci-login-source.js", helperScope);
+      await IOUtils.writeUTF8(loginHelper, helperScope.ScanSciLoginSource);
+      await IOUtils.setPermissions(loginHelper, 384);
+    }
     var log = PathUtils.join(workDir, args[0] === "login" ? "scansci-login.log" : "scansci.log");
     // Positional arguments prevent DOI/URL shell interpolation. umask protects cookies.
     var script = [
       'set -eu; umask 077',
       'export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"',
-      'export SCANSCI_PDF_DATA_DIR="$1"; LOG="$2"; shift 2',
+      'export SCANSCI_PDF_DATA_DIR="$1"; LOG="$2"; HELPER="$3"; shift 3',
       'BIN="$(command -v scansci-pdf || true)"',
       '[ -n "$BIN" ] || { echo "ScanSci CLI missing" >"$LOG"; exit 127; }',
+      'if [ -n "$HELPER" ]; then PY="$(head -n 1 "$BIN")"; PY="${PY:2}"; [ -x "$PY" ] || { echo "ScanSci interpreter unavailable" >"$LOG"; exit 127; }; shift; exec "$PY" "$HELPER" "$1" "$2" "${3:-}" >"$LOG" 2>&1; fi',
       'exec "$BIN" "$@" >"$LOG" 2>&1'
     ].join("\n");
-    await this._runProcess("/bin/zsh", ["-lc", script, "skill-scansci", session, log].concat(args), 1080000);
+    await this._runProcess("/bin/zsh", ["-lc", script, "skill-scansci", session, log, loginHelper].concat(args), 1080000);
   },
 
   _tryScanSci: async function (item, query, workDir) {
@@ -404,7 +352,13 @@ var SkillFulltextDownloader = {
     var dir = PathUtils.join(workDir, "scansci");
     await IOUtils.makeDirectory(dir, { createAncestors: true });
     var args = ["get", query, "--output", dir, "--strategy", "legal_only", "--no-bibtex"];
-    try { await this._scanSciCommand(args, dir); }
+    // Elsevier get() in current ScanSci truncates PII. Use the dedicated
+    // browser path once rather than opening the broken upstream browser first.
+    var elsevier = /^10\.1016\//i.test((item.getField("DOI") || "").trim());
+    try {
+      if (elsevier) await IOUtils.writeUTF8(PathUtils.join(dir, "scansci.log"), "login_required: use complete Elsevier PII");
+      else await this._scanSciCommand(args, dir);
+    }
     catch (e) { if (this.cancelled) return null; }
     var file = await this._pickAttachmentFile(dir);
     if (!file) {
@@ -412,17 +366,31 @@ var SkillFulltextDownloader = {
       var log = await IOUtils.exists(logPath) ? await IOUtils.readUTF8(logPath) : "";
       if (/paywall|login_required|not.entitled|需要登录|机构登录|scansci-pdf login/i.test(log)) {
         var accepted = Services.prompt.confirm(Zotero.getMainWindow(), "ScanSci 登录",
-          "该文献可能需要出版社或机构登录。打开专用浏览器登录并在本机记住会话？账号和支付操作由你完成，关闭登录页后重试。点击取消使用 Zotero 保底下载。");
+          "该文献可能需要出版社或机构登录。打开专用浏览器登录并在本机记住会话？账号和支付操作由你完成。检测到本篇 PDF 后自动关闭；也可点击网页右下角“已登录，保存并重试”。点击取消使用 Zotero 保底下载。");
         if (accepted && !this.cancelled) {
           var url = (item.getField("url") || "").trim();
           var doi = (item.getField("DOI") || "").trim();
-          if (doi) url = "https://doi.org/" + doi;
+          // Preserve a complete ScienceDirect PII from the Zotero record.
+          if (!/^https:\/\//i.test(url) && doi) url = "https://doi.org/" + doi;
           if (/^https:\/\//i.test(url)) {
             try {
-              await this._scanSciCommand(["login", "--login-type", "cookies", "--url", url], dir);
-              if (!this.cancelled) await this._scanSciCommand(args, dir);
-              file = await this._pickAttachmentFile(dir);
-            } catch (e) { if (this.cancelled) return null; }
+              this._updateItem(this.currentItemIndex, "downloading", "等待登录，检测全文后自动继续");
+              var loginPDF = PathUtils.join(dir, "verified-login.pdf");
+              await this._scanSciCommand(["login", url, loginPDF, doi], dir);
+              if (this.cancelled) return null;
+              this._updateItem(this.currentItemIndex, "downloading", "登录完成，验证全文");
+              if (await IOUtils.exists(loginPDF)) file = loginPDF;
+              else {
+                throw new Error("登录窗口结束但没有返回本篇 PDF");
+              }
+              if (!file) this.lastScanSciError = "登录会话已保存，但 ScanSci 仍未取得本篇全文；已尝试 Zotero 保底";
+            } catch (e) {
+              if (this.cancelled) return null;
+              var logFile = PathUtils.join(dir, "scansci-login.log");
+              var diagnostic = await IOUtils.exists(logFile) ? await IOUtils.readUTF8(logFile) : "";
+              var stage = diagnostic.match(/login_failed_stage=([a-z_]+)/);
+              this.lastScanSciError = "ScanSci 登录助手失败" + (stage ? "（" + stage[1] + "）" : "") + "，这与 Elsevier API Key 配置无关";
+            }
           }
         }
       }
