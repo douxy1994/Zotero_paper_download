@@ -1,6 +1,6 @@
 # Skill Fulltext Downloader — Zotero 7–10
 
-## 安装和使用（0.8.1）
+## 安装和使用（0.9.0）
 
 ### 要安装哪些组件？
 
@@ -19,7 +19,7 @@ XPI 不打包 Python 和浏览器。只安装 XPI 时，缺少的引擎会失败
 
 Paper-fetch 请使用[官方 Release](https://github.com/Dictation354/paper-fetch-skill/releases)中对应操作系统、CPU 与 Python ABI 的安装包，并遵循包内安装说明。
 例如 macOS Apple Silicon + Python 3.13 对应 `macos-arm64-cp313`，不要混用不同 Python ABI。
-本机已安装 6.1.5；本插件仍保留 4.x/5.x 的 fetch 参数。
+本版适配 Paper-fetch 7.4.2，并保留 4.x–6.x 的 fetch 参数兼容路径。
 
 ScanSci 推荐通过独立工具环境安装（先安装 uv）：
 
@@ -32,7 +32,7 @@ scansci-pdf login --help
 
 如已安装，可用 `uv tool upgrade scansci-pdf` 更新；浏览器缺失时按 `browser-doctor` 的提示准备。
 登录命令需支持 `--login-type cookies --url`，下载命令需支持 `get --output --strategy --no-bibtex`。
-插件搜索 `~/.local/bin`、`/opt/homebrew/bin`、`/usr/local/bin`；Paper-fetch 优先使用 `/opt/homebrew/bin/paper-fetch`。
+插件搜索 `~/.local/bin`、`/opt/homebrew/bin`、`/usr/local/bin`；Paper-fetch 优先使用 `/opt/homebrew/bin/paper-fetch`，缺失时也搜索 `~/.local/bin`。
 **当前进程调用依赖 `/bin/zsh`，本次仅验证 macOS；不声明 Windows 可用。**
 
 ### 安装 XPI
@@ -52,6 +52,8 @@ scansci-pdf login --help
 任何后端返回 PDF 后，插件都会提取前三页文本，以题录 DOI 或题名关键词核对身份。身份不匹配的文件不会导入，并继续下一级下载工具。
 
 Paper-fetch 完整模式与 ScanSci 各自外层预算为 18 分钟，Paper-fetch 降级为 60 秒。
+`--artifact-mode none` 只控制产物与资源保存，7.x 下不保证禁用浏览器。
+Paper-fetch 返回 JSON 明确标记 `metadata_only`、`abstract_only` 或 `has_fulltext=false` 时，插件继续回退；正文资源 PDF、补充材料和诊断 Markdown 不作为正文附件导入。
 网络、订阅权限和登录状态会影响结果；全链失败仍会显示错误。
 
 ### 需要登录时
@@ -78,10 +80,20 @@ Zotero 8–10 的题录右键菜单包含“清除 ScanSci 登录状态”；确
 - ScanSci 日志位于该次临时工作目录的 `scansci/scansci.log`，登录诊断单独保存在 `scansci-login.log`；分享前检查内容是否含敏感信息。
 - 清除会话后需重新登录，不会删除已导入附件。
 
-### 验证范围
+### 验证范围（0.9.0）
 
-单元测试覆盖 ScanSci 成功、无 PDF、取消、登录确认/重试和定向清除。
-Zotero 10 内使用受控返回值验证三级分派，另检查实际本机 CLI 启动；这不等于所有出版社或机构登录端到端验证。
+- Node 回归覆盖 Zotero 7 菜单、8–10 MenuManager、进程取消/超时、ScanSci 路由、PDF 身份核对，以及 Paper-fetch 7.4.2 的结果质量与附件筛选。
+- Python 登录辅助测试覆盖完整 PII、下载事件、取消和会话保存。
+- macOS / Zotero 10.0.2 独立 Profile 实测插件启动、真实 IOUtils 结果筛选、Markdown 附件导入和 nsIProcess 启动 7.4.2 CLI；测试不使用个人资料库。
+- 本机联网样本被代理 Fake-IP DNS（198.18.x.x）触发的上游地址检查阻止，返回 `metadata_only`；已验证插件拒绝把该结果或遗留文件当成全文。此结果不代表出版社联网下载通过，也未验证 Windows/Linux 的 Zotero 插件运行。
+
+维护者可在工程根目录运行：
+
+```sh
+for test in tests/*.mjs; do node "$test" || exit; done
+python3 tests/login-helper.py
+zsh scripts/build-release.sh
+```
 
 ---
 
@@ -96,7 +108,7 @@ Zotero 10 内使用受控返回值验证三级分派，另检查实际本机 CLI
 - **进度弹窗**：居中弹窗显示下载进度，包含进度条、每条题录状态（⏳等待 / 🔄下载中 / ✅完成 / ❌失败）、可取消
 - **自动导入附件**：下载完成后自动将 PDF（优先）或 Markdown 全文导入为对应题录的子附件；若 Zotero 已下载 OA PDF，则直接识别现有附件，避免把成功下载误报为失败
 - **智能查询**：按 DOI → URL → 标题 的优先级构造查询
-- **两步降级策略**：先尝试完整模式（含浏览器，可能拿到 PDF），失败后自动降级到无浏览器模式（快速拿 Markdown）
+- **两步降级策略**：先尝试完整模式（含浏览器，可能拿到 PDF），失败后自动降级到不保存 provider 产物与资源的模式（60 秒外层预算）
 - **深色模式**：弹窗跟随系统主题自动切换深色/浅色
 - **中英双语**：菜单和界面支持中文和英文
 
@@ -105,7 +117,7 @@ Zotero 10 内使用受控返回值验证三级分派，另检查实际本机 CLI
 | 组件 | 要求 |
 |------|------|
 | Zotero | 7.0–10.0（Zotero 8–10 使用官方 MenuManager；Zotero 7 使用兼容菜单路径） |
-| paper-fetch CLI | 已安装并在 PATH 中，或位于 `/opt/homebrew/bin/paper-fetch`；兼容 4.x / 5.x / 6.x，建议使用最新稳定版（本次验证为 6.1.5） |
+| paper-fetch CLI | 已安装并在 PATH 中，或位于 `/opt/homebrew/bin/paper-fetch`；兼容 4.x / 5.x / 6.x / 7.x，建议使用 7.4.2 |
 | 操作系统 | macOS / Linux（需要 zsh） |
 
 ### 安装 paper-fetch
@@ -234,7 +246,7 @@ Zotero_paper_download/
   1. 提取 DOI/URL/标题
   2. 创建临时目录
   3. 调用 paper-fetch CLI（完整模式，1080s 外层超时；首次 Camoufox 自动准备可能耗时较长）
-  4. 如果完整模式失败 → 降级到无浏览器模式（60s 超时）
+  4. 如果完整模式失败 → 降级到不保存 provider 产物与资源的模式（60s 超时）
   5. 查找生成的 PDF/Markdown（优先 PDF）
   6. 若 paper-fetch 无产物，等待并识别 Zotero 已有 OA PDF，再调用 Zotero 原生可用全文解析器
   7. 导入新文件或接受已存在的有效 PDF 附件；确无全文时显示具体诊断
@@ -288,7 +300,7 @@ Integrates the paper-fetching capability of [paperfetch](https://github.com/doux
 - **Progress Dialog**: Centered dialog with progress bar, per-item status (⏳ pending / 🔄 downloading / ✅ success / ❌ failed), and cancel support
 - **Auto Import**: Downloaded PDF (preferred) or Markdown full text is automatically imported as a child attachment; an OA PDF already downloaded by Zotero is recognized instead of being misreported as a failure
 - **Smart Query**: Constructs queries in priority order: DOI → URL → Title
-- **Two-Step Fallback**: First tries full mode (with browser, may get PDF), then falls back to no-browser mode (fast Markdown)
+- **Two-Step Fallback**: First tries full mode (with browser, may get PDF), then falls back to no-artifact mode (fast Markdown)
 - **Dark Mode**: Dialog follows system theme (light/dark)
 - **Bilingual**: Chinese and English UI
 
@@ -297,7 +309,7 @@ Integrates the paper-fetching capability of [paperfetch](https://github.com/doux
 | Component | Requirement |
 |-----------|-------------|
 | Zotero | 7.0–10.0 (official MenuManager on Zotero 8–10; compatibility menu path on Zotero 7) |
-| paper-fetch CLI | Installed and on PATH, or at `/opt/homebrew/bin/paper-fetch`; compatible with 4.x / 5.x / 6.x; the latest stable version is recommended (6.1.5 verified here) |
+| paper-fetch CLI | Installed and on PATH, or at `/opt/homebrew/bin/paper-fetch`; compatible with 4.x / 5.x / 6.x / 7.x; 7.4.2 is recommended |
 | OS | macOS / Linux (requires zsh) |
 
 ### Install paper-fetch
@@ -422,7 +434,7 @@ Process each item:
   1. Extract DOI/URL/Title
   2. Create temp directory
   3. Call paper-fetch CLI (full mode, 1080s outer timeout; first-use Camoufox preparation may take longer)
-  4. If full mode fails → fallback to no-browser mode (60s timeout)
+  4. If full mode fails → fallback to no-artifact mode (60s timeout)
   5. Find generated PDF/Markdown (PDF preferred)
   6. Import as Zotero attachment
   7. Update dialog status

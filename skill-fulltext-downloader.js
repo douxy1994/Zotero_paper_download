@@ -262,7 +262,7 @@ var SkillFulltextDownloader = {
           fallbackResultJSON, fallbackStdoutLog, fallbackStderrLog
         );
       }).then(function () {
-        return self._pickAttachmentFile(workDir);
+        return self._pickAttachmentFile(workDir, [fallbackResultJSON, resultJSON]);
       }).then(function (file) {
         if (!file) throw new Error("paper-fetch \u672A\u751F\u6210\u53EF\u5BFC\u5165\u6587\u4EF6");
         var contentType = file.toLowerCase().endsWith(".pdf") ? "application/pdf" : "text/markdown";
@@ -468,23 +468,24 @@ var SkillFulltextDownloader = {
 
     // Step 1: Full mode (may get PDF via browser), 1080s outer timeout.
     // paper-fetch 5.4+ may spend up to 900s preparing Camoufox on first use,
-    // followed by a browser request. Older 4.x/5.x versions use the same flags.
+    // followed by a browser request. Versions 4.x–7.x use the same flags.
     // Use the explicit `fetch` subcommand: the legacy root-level `--query` surface
     // is only kept for one compatibility cycle by upstream (4.x and 5.x both
     // support `fetch` with identical flags and exit-code/stdout/stderr contract).
     var fullScript = [
       "set -euo pipefail",
-      "export PATH=\"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/opt/local/bin:$PATH\"",
+      "export PATH=\"/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:/usr/bin:/bin:/opt/local/bin:$PATH\"",
       "BIN=\"/opt/homebrew/bin/paper-fetch\"",
       "if [ ! -x \"$BIN\" ]; then BIN=\"$(command -v paper-fetch || true)\"; fi",
       "if [ -z \"$BIN\" ]; then echo \"paper-fetch CLI not found\" >&2; exit 127; fi",
       "\"$BIN\" fetch --query \"$1\" --format json --output \"$3\" --output-dir \"$2\" --save-markdown --artifact-mode markdown-assets --asset-profile body >\"$4\" 2>\"$5\""
     ].join("\n");
 
-    // Step 2: Fallback (no browser, Markdown only), 60s timeout
+    // Step 2: Fallback (no provider artifacts/assets), 60s outer timeout.
+    // artifact-mode none does not disable browser-backed providers in 7.x.
     var fallbackScript = [
       "set -euo pipefail",
-      "export PATH=\"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/opt/local/bin:$PATH\"",
+      "export PATH=\"/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:/usr/bin:/bin:/opt/local/bin:$PATH\"",
       "BIN=\"/opt/homebrew/bin/paper-fetch\"",
       "if [ ! -x \"$BIN\" ]; then BIN=\"$(command -v paper-fetch || true)\"; fi",
       "if [ -z \"$BIN\" ]; then echo \"paper-fetch CLI not found\" >&2; exit 127; fi",
@@ -495,18 +496,18 @@ var SkillFulltextDownloader = {
       "-lc", fullScript, "skill-fulltext-zotero",
       query, outputDir, resultJSON, stdoutLog, stderrLog
     ], 1080000).then(function () {
-      return self._hasFile(outputDir);
+      return self._hasFile(outputDir, [resultJSON]);
     }).then(function (hasFile) {
       if (hasFile) return true;
       throw new Error("\u5B8C\u6574\u6A21\u5F0F\u672A\u751F\u6210\u6587\u4EF6");
     }).catch(function (fullErr) {
       if (self.cancelled) throw fullErr;
-      // Fallback: no-browser mode
+      // Fallback: no-artifact mode; provider choice remains upstream-owned.
       return self._runProcess("/bin/zsh", [
         "-lc", fallbackScript, "skill-fulltext-zotero",
         query, outputDir, fallbackResultJSON, fallbackStdoutLog, fallbackStderrLog
       ], 60000).then(function () {
-        return self._hasFile(outputDir);
+        return self._hasFile(outputDir, [fallbackResultJSON]);
       }).then(function (hasFile) {
         if (hasFile) return true;
         throw new Error(fullErr.message);
@@ -587,12 +588,8 @@ var SkillFulltextDownloader = {
     return "";
   },
 
-  _hasFile: async function (dir) {
-    var files = await this._listFilesRecursive(dir);
-    return files.some(function (f) {
-      var lo = f.toLowerCase();
-      return lo.endsWith(".pdf") || lo.endsWith(".md");
-    });
+  _hasFile: async function (dir, resultPaths) {
+    return !!(await this._pickAttachmentFile(dir, resultPaths));
   },
 
   _runProcess: function (command, args, timeout) {
@@ -658,8 +655,43 @@ var SkillFulltextDownloader = {
     return deferred.promise;
   },
 
-  _pickAttachmentFile: async function (dir) {
+  _pickAttachmentFile: async function (dir, resultPaths) {
     var files = await this._listFilesRecursive(dir);
+    if (resultPaths) {
+      // CLI JSON is an ArticleModel (4.x–7.x), not the compact MCP envelope.
+      // A zero process exit can still mean metadata_only or abstract_only.
+      var payload = null;
+      for (var resultPath of resultPaths) {
+        if (!(await IOUtils.exists(resultPath))) continue;
+        try { payload = JSON.parse(await IOUtils.readUTF8(resultPath)); }
+        catch (e) { return null; }
+        break;
+      }
+      if (!payload || typeof payload !== "object") return null;
+      if (payload.status && payload.status !== "ok" && payload.status !== "success") return null;
+      var article = payload.article || payload;
+      var quality = article.quality || payload.quality || {};
+      if (quality.has_fulltext === false ||
+          (quality.content_kind && quality.content_kind !== "fulltext")) return null;
+      var acceptance = payload.acceptance || {};
+      if (acceptance.overall === "failed" || acceptance.overall === "blocked") return null;
+      // Assets can themselves be PDF files. Never attach a figure, supplement,
+      // diagnostic, or ScanSci leftover as the Paper-fetch article.
+      var assetPaths = (article.assets || []).reduce(function (paths, asset) {
+        for (var path of [asset.path, asset.source_path]) {
+          if (path) paths.push(path.startsWith("/") ? path : PathUtils.join(dir, path));
+        }
+        return paths;
+      }, []);
+      files = files.filter(function (file) {
+        var relative = file.slice(dir.length + 1);
+        if (assetPaths.includes(file)) return false;
+        if (/(^|\/)(?:[^/]*assets|supplementary|supplements|diagnostics|scansci)(?:\/|$)/i.test(relative)) return false;
+        // Saved article Markdown is a top-level CLI output; nested Markdown
+        // is a provider/cache sidecar, not a standalone article attachment.
+        return !file.toLowerCase().endsWith(".md") || !relative.includes("/");
+      });
+    }
     var pdfs = files.filter(function (f) { return f.toLowerCase().endsWith(".pdf"); });
     if (pdfs.length) return this._pickLargest(pdfs);
     var mds = files.filter(function (f) { return f.toLowerCase().endsWith(".md"); });
