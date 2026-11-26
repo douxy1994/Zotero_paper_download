@@ -98,7 +98,7 @@ assert.equal(plugin.activeProcessCancel, null);
 let calls = [];
 plugin.cancelled = false;
 plugin._runProcess = async (_command, _args, timeout) => { calls.push(timeout); return true; };
-plugin._hasFile = async () => true;
+plugin._paperFetchAttachment = async () => '/out/article.md';
 await plugin._runPaperFetch("Q", "/out", "/full.json", "/full.out", "/full.err", "/fallback.json", "/fallback.out", "/fallback.err");
 assert.deepEqual(calls, [1080000]);
 
@@ -122,7 +122,7 @@ let delayedWaits = 0;
 let oaFallbacks = 0;
 plugin._waitForExistingPDFAttachment = async () => { delayedWaits++; return null; };
 plugin._tryZoteroAvailableFile = async () => { oaFallbacks++; return null; };
-context.Services.dirsvc = { get: () => ({ path: "/tmp" }) };
+context.Services.dirsvc = { get: () => ({ path: "/tmp", normalize() {} }) };
 context.PathUtils.join = (...parts) => parts.join("/");
 context.IOUtils.makeDirectory = async () => {};
 const item = {

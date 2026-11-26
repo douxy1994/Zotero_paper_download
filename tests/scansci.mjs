@@ -1,5 +1,5 @@
 import fs from 'node:fs'; import vm from 'node:vm'; import assert from 'node:assert/strict';
-const c={Zotero:{getMainWindow:()=>null,Attachments:{importFromFile:async x=>x},debug:()=>{}},PathUtils:{join:(...p)=>p.join('/')},IOUtils:{makeDirectory:async()=>{},read:async()=>new Uint8Array([37,80,68,70,45]),exists:async()=>false},Services:{prompt:{confirm:()=>false},dirsvc:{get:()=>({path:'/tmp'})}},Ci:{nsIFile:{}}};
+const c={URL,Zotero:{getMainWindow:()=>null,Attachments:{importFromFile:async x=>x},debug:()=>{}},PathUtils:{join:(...p)=>p.join('/')},IOUtils:{makeDirectory:async()=>{},read:async()=>new Uint8Array([37,80,68,70,45]),exists:async()=>false},Services:{prompt:{confirm:()=>false},dirsvc:{get:()=>({ path: "/tmp", normalize() {} })}},Ci:{nsIFile:{}}};
 vm.createContext(c); vm.runInContext(fs.readFileSync('skill-fulltext-downloader.js','utf8')+';this.p=SkillFulltextDownloader',c); const p=c.p;
 const validatePDFIdentity=p._validatePDFIdentity;
 const originalScan=p._tryScanSci;
@@ -25,11 +25,25 @@ c.Zotero.PDFWorker._query=async()=>({text:'Landslides and fluvial response to la
 assert.equal(await validatePDFIdentity.call(p,'/title-only.pdf',target),true);
 console.log('PASS wrong DOI rejected; expected DOI and strong title match accepted');
 
+const glacier={
+  getField:f=>f==='DOI'?'10.1016/j.scib.2026.10.057':f==='title'?
+    'Flood warnings face a new challenge from hidden glacier water':''
+};
+c.Zotero.PDFWorker._query=async (_method, data)=>{
+  assert.equal(data.maxPages,1);
+  return {text:'Glacial lake outburst floods threaten Asia’s infrastructure. DOI 10.1016/j.scib.2023.05.035. Cited article: 10.1016/j.scib.2026.10.057'};
+};
+await assert.rejects(validatePDFIdentity.call(p,'/wrong.pdf',glacier),/2023\.05\.035/);
+c.Zotero.PDFWorker._query=async()=>({
+  text:'Flood warnings face a new challenge from hidden glacier water. DOI 10.1016/\n j.scib.2026.10.057'
+});
+assert.equal(await validatePDFIdentity.call(p,'/correct.pdf',glacier),true);
+console.log('PASS Elsevier first-page identity excludes a cited DOI and accepts a wrapped publication DOI');
+
 // A mismatched PDF from Paper-fetch must be rejected before import and continue to ScanSci.
 p.cancelled=false;
 p._findExistingPDFAttachment=async()=>null;
-p._runPaperFetch=async()=>true;
-p._pickAttachmentFile=async()=>'/wrong-paper-fetch.pdf';
+p._runPaperFetch=async()=>'/wrong-paper-fetch.pdf';
 p._validatePDFIdentity=async()=>{throw new Error('PDF DOI 不匹配: 10.5194/wrong');};
 let scanFallbacks=0;
 p._tryScanSci=async()=>{scanFallbacks++;return {source:'scansci'};};
@@ -40,8 +54,39 @@ console.log('PASS mismatched Paper-fetch PDF continues to ScanSci');
 
 // Login failure must not fall back to a stale Paper-fetch API-key message.
 p._pickAttachmentFile=async()=>null;
-c.IOUtils.readUTF8=async path=>path.endsWith('scansci-login.log')?'login_failed_stage=save_session':'login_required';
+c.IOUtils.writeUTF8=async()=>{};
+c.IOUtils.readUTF8=async path=>path.endsWith('scansci-login.log')?'login_browser_ready\nlogin_failed_stage=save_session':'login_required';
 p._scanSciCommand=async args=>{if(args[0]==='login'){assert.equal(args[1],'https://linkinghub.elsevier.com/retrieve/pii/S0169555X22000708');throw Error('exit 1');}};
 await originalScan.call(p,{id:1,getField:f=>f==='url'?'https://linkinghub.elsevier.com/retrieve/pii/S0169555X22000708':f==='DOI'?'10.1016/j.geomorph.2022.108177':''},'query','/w');
 assert.match(p.lastScanSciError,/save_session/);
 console.log('PASS exact Elsevier landing URL retained and login-stage failure reported');
+
+const articleURL='https://linkinghub.elsevier.com/retrieve/pii/S0169555X22000708';
+const elsevierItem={id:1,getField:f=>f==='url'?articleURL:f==='DOI'?'10.1016/j.geomorph.2022.108177':''};
+const shown=[];
+const opened=[];
+c.Services.prompt.confirm=(_parent,title,body)=>{
+  shown.push({title,body});
+  return true;
+};
+c.Zotero.launchURL=()=>{throw new Error('external browser must never be used as a download path');};
+p._tryNativeElsevier=async (item, dir, consent)=>{
+  opened.push({url:item.getField('url'),consent});
+  return dir+'/elsevier-native.pdf';
+};
+p._validatePDFIdentity=async()=>true;
+let loginDiagnostic='login_failed_stage=launch\n';
+c.IOUtils.readUTF8=async path=>path.endsWith('scansci-login.log')?loginDiagnostic:'login_required';
+const automatic=await originalScan.call(p,elsevierItem,'query','/w');
+assert.deepEqual(opened,[{url:articleURL,consent:true}]);
+assert.equal(automatic.file,'/w/scansci/elsevier-native.pdf');
+
+loginDiagnostic='login_browser_ready\nlogin_exit=2\n';
+await originalScan.call(p,elsevierItem,'query','/w');
+assert.match(p.lastScanSciError,/已取消或关闭/);
+loginDiagnostic='login_browser_ready\nlogin_exit=3\n';
+await originalScan.call(p,elsevierItem,'query','/w');
+assert.match(p.lastScanSciError,/等待超时.*机构访问权限/);
+assert.deepEqual(opened,[{url:articleURL,consent:true}]);
+assert.deepEqual(shown.map(x=>x.title),['ScanSci 登录','ScanSci 登录','ScanSci 登录']);
+console.log('PASS failed ScanSci browser starts an automatic native route and imports; cancellation and timeout do not');

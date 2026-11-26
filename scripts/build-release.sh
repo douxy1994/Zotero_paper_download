@@ -1,6 +1,17 @@
 #!/bin/zsh
 set -euo pipefail
 
+LOCAL_ONLY=false
+case "${1:-}" in
+  --local) LOCAL_ONLY=true ;;
+  "") ;;
+  *) printf 'usage: %s [--local]\n' "$0" >&2; exit 2 ;;
+esac
+if (( $# > 1 )); then
+  printf 'usage: %s [--local]\n' "$0" >&2
+  exit 2
+fi
+
 ROOT="${0:A:h:h}"
 cd "$ROOT"
 
@@ -20,7 +31,8 @@ zip -X -q -r "$TMP_XPI" \
 HASH=$(shasum -a 256 "$TMP_XPI" | awk '{print $1}')
 cp "$TMP_XPI" skill-fulltext-zotero.xpi
 
-python3 - "$VERSION" "$HASH" <<'PY'
+if ! $LOCAL_ONLY; then
+  python3 - "$VERSION" "$HASH" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -49,6 +61,7 @@ tmp = path.with_suffix(".json.tmp")
 tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
 tmp.replace(path)
 PY
+fi
 
 unzip -t skill-fulltext-zotero.xpi >/dev/null
 printf 'version=%s\nsha256=%s\nxpi=%s\n' "$VERSION" "$HASH" "$ROOT/skill-fulltext-zotero.xpi"

@@ -29,7 +29,6 @@ for (const quality of [
 ]) {
   payload = { quality };
   assert.equal(await select(), null);
-  assert.equal(await p._hasFile('/work', ['/work/result.json']), false);
 }
 console.log('PASS metadata/abstract JSON rejects leftover PDFs and Markdown even after exit 0');
 
@@ -62,7 +61,7 @@ console.log('PASS malformed/missing result rejects Paper-fetch; ScanSci file-onl
 // Exercise command construction rather than merely matching source strings.
 let calls = [];
 p._runProcess = async (command, args, timeout) => { calls.push({ command, args, timeout }); };
-p._hasFile = async () => calls.length > 1;
+p._paperFetchAttachment = async () => calls.length > 1 ? '/work/article.md' : null;
 p.cancelled = false;
 await p._runPaperFetch('10.0000/query; never-shell-eval', '/work', '/work/result.json', '/full.out', '/full.err', '/fallback.json', '/fallback.out', '/fallback.err');
 assert.equal(calls.length, 2);
@@ -70,8 +69,9 @@ assert.equal(calls[0].command, '/bin/zsh');
 assert.equal(calls[0].args[3], '10.0000/query; never-shell-eval');
 assert.match(calls[0].args[1], /\$HOME\/\.local\/bin/);
 assert.match(calls[0].args[1], /fetch --query "\$1"/);
-assert.match(calls[0].args[1], /--artifact-mode markdown-assets --asset-profile body/);
-assert.match(calls[1].args[1], /--artifact-mode none/);
+assert.match(calls[0].args[1], /args\+=\(--asset-profile body\)/);
+assert.equal(calls[0].args[8], "markdown-assets");
+assert.equal(calls[1].args[8], "none");
 assert.equal(calls[0].timeout, 1080000);
 assert.equal(calls[1].timeout, 60000);
 console.log('PASS 7.4.2 CLI flags, private-bin discovery, argument quoting, and both timeout budgets');

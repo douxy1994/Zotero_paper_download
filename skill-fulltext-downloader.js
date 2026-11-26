@@ -8,6 +8,7 @@ var SkillFulltextDownloader = {
   dialog: null,
   activeProcess: null,
   activeProcessCancel: null,
+  activePublisherCancel: null,
   lastScanSciError: "",
 
   init: function (params) {
@@ -60,6 +61,7 @@ var SkillFulltextDownloader = {
 
   shutdown: function () {
     if (this.activeProcessCancel) this.activeProcessCancel();
+    if (this.activePublisherCancel) this.activePublisherCancel();
     if (this.menuID && Zotero.MenuManager && Zotero.MenuManager.unregisterMenu) {
       Zotero.MenuManager.unregisterMenu(this.menuID);
       this.menuID = null;
@@ -177,6 +179,7 @@ var SkillFulltextDownloader = {
   _cancel: function () {
     this.cancelled = true;
     if (this.activeProcessCancel) this.activeProcessCancel();
+    if (this.activePublisherCancel) this.activePublisherCancel();
     var dlg = this.dialog;
     if (!dlg) return;
     var btn = dlg.document.getElementById("sf-cancel");
@@ -242,7 +245,9 @@ var SkillFulltextDownloader = {
       || (item.getField("title") || "").trim();
     if (!query) return Promise.reject(new Error("\u7F3A\u5C11DOI/URL/\u6807\u9898"));
 
-    var tmpRoot = Services.dirsvc.get("TmpD", Ci.nsIFile).path;
+    var tmp = Services.dirsvc.get("TmpD", Ci.nsIFile);
+    tmp.normalize(); // CLI receipts report resolved paths (including macOS /private/var).
+    var tmpRoot = tmp.path;
     var workDir = PathUtils.join(tmpRoot, "skill-fulltext-zotero", item.key + "-" + Date.now());
     var resultJSON = PathUtils.join(workDir, "paper-fetch-result.json");
     var fallbackResultJSON = PathUtils.join(workDir, "paper-fetch-result.fallback.json");
@@ -255,14 +260,15 @@ var SkillFulltextDownloader = {
     return self._findExistingPDFAttachment(item).then(function (existing) {
       if (existing) return existing;
 
-      return IOUtils.makeDirectory(workDir, { createAncestors: true }).then(function () {
+      return IOUtils.makeDirectory(workDir, { createAncestors: true, permissions: 448 }).then(function () {
+        // The CLI launcher is POSIX-only. Windows can use the Zotero-native
+        // publisher and OA routes without trying to spawn /bin/zsh.
+        if (Zotero.isWin) throw new Error("Windows 使用 Zotero 内置下载通道");
         return self._runPaperFetch(
           query, workDir,
           resultJSON, stdoutLog, stderrLog,
           fallbackResultJSON, fallbackStdoutLog, fallbackStderrLog
         );
-      }).then(function () {
-        return self._pickAttachmentFile(workDir, [fallbackResultJSON, resultJSON]);
       }).then(function (file) {
         if (!file) throw new Error("paper-fetch \u672A\u751F\u6210\u53EF\u5BFC\u5165\u6587\u4EF6");
         var contentType = file.toLowerCase().endsWith(".pdf") ? "application/pdf" : "text/markdown";
@@ -296,7 +302,7 @@ var SkillFulltextDownloader = {
         }).then(function (attachment) {
           if (attachment) return attachment;
           return self._paperFetchFailureDetail([
-            fallbackResultJSON, resultJSON, fallbackStderrLog, stderrLog
+            fallbackStdoutLog, stdoutLog, fallbackResultJSON, resultJSON, fallbackStderrLog, stderrLog
           ]).then(function (detail) {
             throw new Error(self.lastScanSciError || detail || fetchErr.message || "\u672A\u627E\u5230\u53EF\u7528\u5168\u6587");
           });
@@ -310,29 +316,43 @@ var SkillFulltextDownloader = {
     return PathUtils.join(Services.dirsvc.get("ProfD", Ci.nsIFile).path, "skill-fulltext-scansci");
   },
 
-  _scanSciCommand: async function (args, workDir) {
+  _scanSciCommand: async function (args, workDir, expectedItem) {
     if (this.cancelled) throw new Error("下载已取消");
-    var session = this._scanSciSessionDir();
-    await IOUtils.makeDirectory(session, { createAncestors: true, permissions: 448 });
-    await IOUtils.setPermissions(session, 448);
-    var configPath = PathUtils.join(session, "config.json");
-    if (!(await IOUtils.exists(configPath))) {
-      await IOUtils.writeUTF8(configPath, JSON.stringify({
-        download_strategy: "legal_only", scihub_enabled: false,
-        auto_relogin: false, progress_bar_auto: false, browser_headless: true,
-        cache_dir: PathUtils.join(session, "cache")
-      }));
-    }
-    await IOUtils.setPermissions(configPath, 384);
+    var login = args[0] === "login";
+    var log = PathUtils.join(workDir, login ? "scansci-login.log" : "scansci.log");
+    var session;
     var loginHelper = "";
-    if (args[0] === "login") {
-      loginHelper = PathUtils.join(session, "scansci-login.py");
-      var helperScope = {};
-      Services.scriptloader.loadSubScript("chrome://skill-fulltext/content/scansci-login-source.js", helperScope);
-      await IOUtils.writeUTF8(loginHelper, helperScope.ScanSciLoginSource);
-      await IOUtils.setPermissions(loginHelper, 384);
+    var stage = "profile";
+    try {
+      session = this._scanSciSessionDir();
+      await IOUtils.makeDirectory(session, { createAncestors: true, permissions: 448 });
+      await IOUtils.setPermissions(session, 448);
+      var configPath = PathUtils.join(session, "config.json");
+      if (!(await IOUtils.exists(configPath))) {
+        await IOUtils.writeUTF8(configPath, JSON.stringify({
+          download_strategy: "legal_only", scihub_enabled: false,
+          auto_relogin: false, progress_bar_auto: false, browser_headless: true,
+          cache_dir: PathUtils.join(session, "cache")
+        }));
+      }
+      await IOUtils.setPermissions(configPath, 384);
+      if (login) {
+        stage = "helper";
+        loginHelper = PathUtils.join(session, "scansci-login.py");
+        var helperScope = {};
+        Services.scriptloader.loadSubScript(this.rootURI + "content/scansci-login-source.js", helperScope, "UTF-8");
+        if (typeof helperScope.ScanSciLoginSource !== "string" || !helperScope.ScanSciLoginSource) {
+          throw new Error("ScanSci 登录脚本缺失");
+        }
+        await IOUtils.writeUTF8(loginHelper, helperScope.ScanSciLoginSource);
+        await IOUtils.setPermissions(loginHelper, 384);
+      }
+    } catch (e) {
+      if (login) {
+        try { await IOUtils.writeUTF8(log, "login_failed_stage=" + stage + "\n"); } catch (_) {}
+      }
+      throw e;
     }
-    var log = PathUtils.join(workDir, args[0] === "login" ? "scansci-login.log" : "scansci.log");
     // Positional arguments prevent DOI/URL shell interpolation. umask protects cookies.
     var script = [
       'set -eu; umask 077',
@@ -340,10 +360,226 @@ var SkillFulltextDownloader = {
       'export SCANSCI_PDF_DATA_DIR="$1"; LOG="$2"; HELPER="$3"; shift 3',
       'BIN="$(command -v scansci-pdf || true)"',
       '[ -n "$BIN" ] || { echo "ScanSci CLI missing" >"$LOG"; exit 127; }',
-      'if [ -n "$HELPER" ]; then PY="$(head -n 1 "$BIN")"; PY="${PY:2}"; [ -x "$PY" ] || { echo "ScanSci interpreter unavailable" >"$LOG"; exit 127; }; shift; exec "$PY" "$HELPER" "$1" "$2" "${3:-}" >"$LOG" 2>&1; fi',
+      'if [ -n "$HELPER" ]; then',
+      '  exec >"$LOG" 2>&1',
+      '  PY="$(head -n 1 "$BIN")"; PY="${PY:2}"',
+      '  [ -x "$PY" ] || { echo "login_failed_stage=interpreter"; exit 127; }',
+      '  shift; exec "$PY" "$HELPER" "$@"',
+      'fi',
       'exec "$BIN" "$@" >"$LOG" 2>&1'
     ].join("\n");
-    await this._runProcess("/bin/zsh", ["-lc", script, "skill-scansci", session, log, loginHelper].concat(args), 1080000);
+    var verify = login && expectedItem;
+    var process = this._runProcess("/bin/zsh",
+      ["-lc", script, "skill-scansci", session, log, loginHelper].concat(args, verify ? ["--verify-in-zotero"] : []),
+      1080000);
+    if (!verify) return process;
+    await this._verifyPublisherCandidates(process, args[2], expectedItem);
+  },
+
+  _verifyPublisherCandidates: async function (process, output, item) {
+    var candidate = output + ".candidate";
+    var decision = output + ".decision";
+    var settled = false;
+    // Attach a rejection handler immediately; report the actual process result below.
+    var completion = process.then(() => { settled = true; }, () => { settled = true; });
+    try {
+      while (!settled && !this.cancelled) {
+        if (await IOUtils.exists(candidate) && !(await IOUtils.exists(decision))) {
+          var verdict = "accept";
+          try {
+            await this._validatePDFIdentity(candidate, item);
+          } catch (e) {
+            verdict = "reject";
+            this._updateItem(this.currentItemIndex, "downloading", "已排除不匹配的 PDF，继续获取本篇全文");
+          }
+          if (!settled && !this.cancelled) {
+            await IOUtils.writeUTF8(decision, verdict, { tmpPath: decision + ".tmp" });
+          }
+        }
+        if (!settled && !this.cancelled) {
+          await Promise.race([completion, Zotero.Promise.delay(250)]);
+        }
+      }
+      await process;
+    } finally {
+      if (!settled && this.activeProcessCancel) this.activeProcessCancel();
+      // Failed or cancelled candidates must not be visible as importable PDFs.
+      for (var path of [candidate, decision, decision + ".tmp"]) {
+        try { await IOUtils.remove(path, { ignoreAbsent: true }); } catch (_) {}
+      }
+    }
+  },
+
+  _readScanSciLoginLog: async function (logFile) {
+    try {
+      if (await IOUtils.exists(logFile)) return await IOUtils.readUTF8(logFile);
+    } catch (_) {}
+    return "";
+  },
+
+  _scanSciLoginFailure: function (diagnostic) {
+    if (/^login_exit=2$/m.test(diagnostic)) return "已取消或关闭 ScanSci 登录窗口；已尝试 Zotero 保底";
+    if (/^login_exit=3$/m.test(diagnostic)) return "ScanSci 登录等待超时，未取得本篇 PDF；请在出版社页面确认登录及机构访问权限";
+
+    var stage = (diagnostic.match(/^login_failed_stage=([a-z_]+)$/m) || [])[1];
+    if (/^ScanSci CLI missing$/m.test(diagnostic)) stage = "cli";
+    var reasons = {
+      cli: "未找到 ScanSci 命令", interpreter: "ScanSci 的 Python 环境不可用",
+      helper: "登录脚本加载失败", dependencies: "登录依赖不可用",
+      profile: "专用浏览器配置读取失败", launch: "专用浏览器启动失败",
+      context: "专用浏览器初始化失败", navigate: "论文页面打开失败",
+      await_login: "登录过程中浏览器运行异常", save_session: "登录会话保存失败"
+    };
+    var ready = /^login_browser_ready$/m.test(diagnostic);
+    var message = stage && reasons[stage] ? reasons[stage] + "（" + stage + "）" :
+      ready ? "ScanSci 登录窗口已启动，但未取得本篇 PDF" : "ScanSci 专用登录窗口未能启动";
+    return message + "；与 Elsevier API Key 无关";
+  },
+
+  _elsevierDOI: function (item) {
+    var doi = String(item.getField("DOI") || "").trim()
+      .replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "");
+    return /^10\.1016\/[^\s?#]+$/i.test(doi) ? doi : "";
+  },
+
+  _elsevierPII: function (url) {
+    try {
+      var parsed = new URL(url);
+      if (parsed.protocol !== "https:" || parsed.port || parsed.username || parsed.password) return "";
+      var pattern = /^\/(?:science\/article(?:\/abs)?|retrieve)\/pii\/([a-z0-9]{17})(?:\/|$)/i;
+      if (["www.sciencedirect.com", "sciencedirect.com", "linkinghub.elsevier.com"].includes(parsed.hostname)) {
+        return (parsed.pathname.match(pattern) || [])[1]?.toUpperCase() || "";
+      }
+    } catch (_) {}
+    return "";
+  },
+
+  _elsevierArticle: function (pii) {
+    return "https://www.sciencedirect.com/science/article/pii/" + pii;
+  },
+
+  _publisherRequest: function (url, options) {
+    return Zotero.HTTP.request("GET", url, options);
+  },
+
+  _getElsevierPDF: async function (pii, output, state) {
+    var article = this._elsevierArticle(pii);
+    var url = article + "/pdfft?download=true";
+    for (var attempt = 0; attempt < 2 && !state.stopped; attempt++) {
+      var response = await this._publisherRequest(url, {
+        responseType: "arraybuffer", timeout: 15000, successCodes: false,
+        noRetryOnThrottle: true, errorDelayMax: 0,
+        headers: { Referer: article },
+        cancellerReceiver: (abort) => { state.abort = abort; }
+      });
+      state.abort = null;
+      if (state.stopped || response.status !== 200 || !response.response) return false;
+      var data = new Uint8Array(response.response);
+      if (data.length >= 5 && String.fromCharCode(...data.subarray(0, 5)) === "%PDF-") {
+        await IOUtils.write(output, data);
+        if (state.validate) {
+          try { await state.validate(output); }
+          catch (e) {
+            await IOUtils.remove(output, { ignoreAbsent: true });
+            return false;
+          }
+        }
+        return true;
+      }
+
+      // ScienceDirect can return a PDF viewer page rather than PDF bytes.
+      // Follow only an actual publisher-provided link for this exact article.
+      if (attempt || data.length > 2 * 1024 * 1024 ||
+          !/\btext\/html\b/i.test(response.getResponseHeader("Content-Type") || "")) return false;
+      var html = new TextDecoder().decode(data);
+      var doc = new DOMParser().parseFromString(html, "text/html");
+      var nodes = doc.querySelectorAll('meta[name="citation_pdf_url"], iframe[src], object[data], embed[src], a[href]');
+      var linked = Array.from(nodes, (node) => {
+        try {
+          var value = node.getAttribute("content") || node.getAttribute("src") ||
+            node.getAttribute("data") || node.getAttribute("href");
+          if (!value) return null;
+          var link = new URL(value, response.responseURL || article);
+          if (link.protocol !== "https:" || link.port || link.username || link.password || link.href === url) return null;
+          var assets = link.hostname === "pdf.sciencedirectassets.com";
+          var assetPath = new RegExp("(?:^|/)1-s2\\.0-" + pii + "(?:[/.\\-]|$)", "i");
+          return (assets && assetPath.test(link.pathname) ||
+            link.hostname === "www.sciencedirect.com" && this._elsevierPII(link.href) === pii &&
+            /\/(?:pdfft|pdf)(?:\/|$)/i.test(link.pathname)) ? link.href : null;
+        } catch (_) { return null; }
+      }).find(Boolean);
+      if (!linked) return false;
+      url = linked;
+    }
+    return false;
+  },
+
+  _tryNativeElsevier: async function (item, dir, consent) {
+    var doi = this._elsevierDOI(item);
+    var pii = this._elsevierPII(item.getField("url"));
+    if (!doi || !Zotero.HTTP?.request || !Zotero.openInViewer) return null;
+    var startURL = pii ? this._elsevierArticle(pii) : "https://doi.org/" + doi;
+    var output = PathUtils.join(dir, "elsevier-native.pdf");
+    var win;
+    var state = { stopped: false, abort: null, validate: (file) => this._validatePDFIdentity(file, item) };
+    var stop = () => {
+      state.stopped = true;
+      if (state.abort) state.abort();
+      if (win && !win.closed) win.close();
+    };
+    this.activePublisherCancel = stop;
+    try {
+      // Reuse the cookie jar shared by Zotero's viewer and HTTP requests.
+      // No browser window is needed when access is already available.
+      this._updateItem(this.currentItemIndex, "downloading", "检查 ScienceDirect 全文");
+      if (!pii) {
+        try {
+          var landing = await this._publisherRequest(startURL, {
+            timeout: 10000, successCodes: false, errorDelayMax: 0,
+            cancellerReceiver: (abort) => { state.abort = abort; }
+          });
+          pii = this._elsevierPII(landing.responseURL);
+        } catch (_) {} finally { state.abort = null; }
+      }
+      var probe = async () => {
+        try { return await this._getElsevierPDF(pii, output, state); }
+        catch (_) { return false; }
+        finally { state.abort = null; }
+      };
+      if (pii && !state.stopped && await probe()) return output;
+      if (state.stopped || this.cancelled) return null;
+      if (!consent && !Services.prompt.confirm(Zotero.getMainWindow(), "ScienceDirect 登录",
+        "需要出版社或机构访问权限。是否在 Zotero 内置浏览器打开论文？完成账号验证后，插件会自动重试下载并导入 PDF。")) {
+        this.lastScanSciError = "已跳过 ScienceDirect 登录；已尝试 Zotero 保底";
+        return null;
+      }
+      this._updateItem(this.currentItemIndex, "downloading", "等待 ScienceDirect 登录，完成后自动下载");
+      win = Zotero.openInViewer(pii ? this._elsevierArticle(pii) : startURL);
+      if (!win) throw new Error("Zotero 内置登录窗口启动失败");
+      var deadline = Date.now() + 15 * 60 * 1000;
+      var lastURL = "", nextProbe = 0;
+      while (!this.cancelled && !state.stopped && !win.closed && Date.now() < deadline) {
+        var currentURL = win.document.querySelector("browser")?.currentURI?.spec || "";
+        var currentPII = this._elsevierPII(currentURL);
+        if (currentPII && (!pii || currentPII === pii)) {
+          pii = currentPII;
+          if (currentURL !== lastURL || Date.now() >= nextProbe) {
+            nextProbe = Date.now() + 10000;
+            lastURL = currentURL;
+            if (await probe() && !win.closed && !state.stopped && !this.cancelled) return output;
+          }
+        }
+        if (!win.closed && !state.stopped) await Zotero.Promise.delay(1000);
+      }
+      if (!this.cancelled && !state.stopped) {
+        this.lastScanSciError = win.closed ? "已关闭 ScienceDirect 登录窗口；已尝试 Zotero 保底" :
+          "ScienceDirect 在登录等待时间内未返回可下载的 PDF；请检查机构访问权限或站点状态";
+      }
+      return null;
+    } finally {
+      stop();
+      if (this.activePublisherCancel === stop) this.activePublisherCancel = null;
+    }
   },
 
   _tryScanSci: async function (item, query, workDir) {
@@ -354,7 +590,11 @@ var SkillFulltextDownloader = {
     var args = ["get", query, "--output", dir, "--strategy", "legal_only", "--no-bibtex"];
     // Elsevier get() in current ScanSci truncates PII. Use the dedicated
     // browser path once rather than opening the broken upstream browser first.
-    var elsevier = /^10\.1016\//i.test((item.getField("DOI") || "").trim());
+    var elsevier = !!this._elsevierDOI(item);
+    if (Zotero.isWin) {
+      var nativeFile = elsevier ? await this._tryNativeElsevier(item, dir, false) : null;
+      return this._importScanSciPDF(nativeFile, item, "ScienceDirect 全文");
+    }
     try {
       if (elsevier) await IOUtils.writeUTF8(PathUtils.join(dir, "scansci.log"), "login_required: use complete Elsevier PII");
       else await this._scanSciCommand(args, dir);
@@ -366,45 +606,52 @@ var SkillFulltextDownloader = {
       var log = await IOUtils.exists(logPath) ? await IOUtils.readUTF8(logPath) : "";
       if (/paywall|login_required|not.entitled|需要登录|机构登录|scansci-pdf login/i.test(log)) {
         var accepted = Services.prompt.confirm(Zotero.getMainWindow(), "ScanSci 登录",
-          "该文献可能需要出版社或机构登录。打开专用浏览器登录并在本机记住会话？账号和支付操作由你完成。检测到本篇 PDF 后自动关闭；也可点击网页右下角“已登录，保存并重试”。点击取消使用 Zotero 保底下载。");
+          "该文献可能需要出版社或机构登录。是否打开登录窗口？完成账号验证后插件会自动下载并导入 PDF。点击取消使用 Zotero 保底下载。");
         if (accepted && !this.cancelled) {
           var url = (item.getField("url") || "").trim();
-          var doi = (item.getField("DOI") || "").trim();
+          var doi = this._elsevierDOI(item) || (item.getField("DOI") || "").trim();
           // Preserve a complete ScienceDirect PII from the Zotero record.
-          if (!/^https:\/\//i.test(url) && doi) url = "https://doi.org/" + doi;
+          if ((elsevier && !this._elsevierPII(url)) || (!/^https:\/\//i.test(url) && doi)) {
+            url = "https://doi.org/" + doi;
+          }
           if (/^https:\/\//i.test(url)) {
             try {
               this._updateItem(this.currentItemIndex, "downloading", "等待登录，检测全文后自动继续");
               var loginPDF = PathUtils.join(dir, "verified-login.pdf");
-              await this._scanSciCommand(["login", url, loginPDF, doi], dir);
+              await this._scanSciCommand(["login", url, loginPDF, doi], dir, item);
               if (this.cancelled) return null;
               this._updateItem(this.currentItemIndex, "downloading", "登录完成，验证全文");
               if (await IOUtils.exists(loginPDF)) file = loginPDF;
-              else {
-                throw new Error("登录窗口结束但没有返回本篇 PDF");
-              }
-              if (!file) this.lastScanSciError = "登录会话已保存，但 ScanSci 仍未取得本篇全文；已尝试 Zotero 保底";
+              else throw new Error("登录窗口结束但没有返回本篇 PDF");
             } catch (e) {
               if (this.cancelled) return null;
-              var logFile = PathUtils.join(dir, "scansci-login.log");
-              var diagnostic = await IOUtils.exists(logFile) ? await IOUtils.readUTF8(logFile) : "";
-              var stage = diagnostic.match(/login_failed_stage=([a-z_]+)/);
-              this.lastScanSciError = "ScanSci 登录助手失败" + (stage ? "（" + stage[1] + "）" : "") + "，这与 Elsevier API Key 配置无关";
+              var diagnostic = await this._readScanSciLoginLog(PathUtils.join(dir, "scansci-login.log"));
+              this.lastScanSciError = this._scanSciLoginFailure(diagnostic);
+              if (elsevier && !/^login_browser_ready$|^login_exit=[23]$/m.test(diagnostic)) {
+                var fallbackFile = await this._tryNativeElsevier(item, dir, true);
+                return this._importScanSciPDF(fallbackFile, item, "ScienceDirect 全文");
+              }
             }
           }
         }
       }
     }
+    return this._importScanSciPDF(file, item);
+  },
+
+  _importScanSciPDF: async function (file, item, title = "ScanSci 全文") {
     if (this.cancelled || !file || !file.toLowerCase().endsWith(".pdf")) return null;
     await this._validatePDFIdentity(file, item);
+    if (this.cancelled) return null;
     var existing = await this._findExistingPDFAttachment(item);
     if (existing) return existing;
     return Zotero.Attachments.importFromFile({
-      file: file, parentItemID: item.id, title: "ScanSci 全文", contentType: "application/pdf"
+      file: file, parentItemID: item.id, title: title, contentType: "application/pdf"
     });
   },
 
   _validatePDFIdentity: async function (file, item) {
+    var elsevier = !!this._elsevierDOI(item);
     var header = await IOUtils.read(file, { maxBytes: 5 });
     if (String.fromCharCode.apply(null, header) !== "%PDF-") {
       throw new Error("\u4E0B\u8F7D\u7ED3\u679C\u4E0D\u662F PDF");
@@ -418,35 +665,46 @@ var SkillFulltextDownloader = {
     try {
       if (Zotero.PDFWorker._init) Zotero.PDFWorker._init();
       result = await Zotero.PDFWorker._query(
-        "pdf.getFulltext", { buf: buffer, maxPages: 3 }, [buffer]
+        "pdf.getFulltext", { buf: buffer, maxPages: elsevier ? 1 : 3 }, [buffer]
       );
     } catch (e) {
       throw new Error("PDF \u6587\u672C\u63D0\u53D6\u5931\u8D25: " + (e.message || String(e)));
     }
-    var text = String(result && result.text || "").slice(0, 30000).toLowerCase();
+    var text = String(result && result.text || "").slice(0, 30000).toLowerCase()
+      .replace(/(10\.\d{4,9})\s*\/\s*/g, "$1/");
     if (!text.trim()) throw new Error("PDF \u524D\u4E09\u9875\u6CA1\u6709\u53EF\u9A8C\u8BC1\u6587\u672C");
 
     var doi = String(item.getField("DOI") || "").trim().toLowerCase()
       .replace(/^https?:\/\/(?:dx\.)?doi\.org\//, "");
-    if (doi && text.indexOf(doi) !== -1) return true;
+    var foundDOIs = (text.match(/10\.\d{4,9}\/[-._;()/:a-z0-9]+/g) || [])
+      .map((value) => value.replace(/[.,;]+$/, ""));
+    var hasDOI = doi && (elsevier ? foundDOIs.includes(doi) : text.indexOf(doi) !== -1);
+    if (hasDOI && !elsevier) return true;
 
     var normalize = function (value) {
-      return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+      return String(value || "").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-z0-9]+/g, " ").trim();
     };
     var stop = new Set(["the", "and", "for", "with", "from", "into", "this", "that", "river"]);
     var tokens = Array.from(new Set(normalize(item.getField("title")).split(" ").filter(function (token) {
       return token.length >= 4 && !stop.has(token);
     })));
-    var normalizedText = " " + normalize(text) + " ";
+    // A DOI in the contents/references of another Elsevier PDF is not its
+    // publication identity. Check that the expected title is at the front.
+    var normalizedText = " " + normalize(elsevier ? text.slice(0, 2200) : text) + " ";
     var matched = tokens.filter(function (token) {
       return normalizedText.indexOf(" " + token + " ") !== -1;
     }).length;
     var score = tokens.length ? matched / tokens.length : 0;
-    if (tokens.length >= 4 && score >= 0.7) return true;
+    if (elsevier) {
+      var exactTitle = normalize(item.getField("title"));
+      if (hasDOI && (tokens.length < 4 || score >= 0.7)) return true;
+      if (!foundDOIs.length && tokens.length >= 4 && normalizedText.includes(" " + exactTitle + " ")) return true;
+    } else if (tokens.length >= 4 && score >= 0.7) return true;
 
-    var found = text.match(/10\.\d{4,9}\/[-._;()/:a-z0-9]+/i);
+    var found = foundDOIs.find((value) => value !== doi);
     if (found) {
-      throw new Error("PDF DOI \u4E0D\u5339\u914D: " + found[0].replace(/[.,;]+$/, ""));
+      throw new Error("PDF DOI \u4E0D\u5339\u914D: " + found);
     }
     throw new Error("PDF \u9898\u540D\u5339\u914D\u5EA6\u4E0D\u8DB3 (" + Math.round(score * 100) + "%)");
   },
@@ -466,53 +724,93 @@ var SkillFulltextDownloader = {
   ) {
     var self = this;
 
-    // Step 1: Full mode (may get PDF via browser), 1080s outer timeout.
-    // paper-fetch 5.4+ may spend up to 900s preparing Camoufox on first use,
-    // followed by a browser request. Versions 4.x–7.x use the same flags.
-    // Use the explicit `fetch` subcommand: the legacy root-level `--query` surface
-    // is only kept for one compatibility cycle by upstream (4.x and 5.x both
-    // support `fetch` with identical flags and exit-code/stdout/stderr contract).
-    var fullScript = [
-      "set -euo pipefail",
-      "export PATH=\"/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:/usr/bin:/bin:/opt/local/bin:$PATH\"",
-      "BIN=\"/opt/homebrew/bin/paper-fetch\"",
-      "if [ ! -x \"$BIN\" ]; then BIN=\"$(command -v paper-fetch || true)\"; fi",
+    var script = [
+      "set -euo pipefail; umask 077",
+      "export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/opt/local/bin:$PATH\"",
+      "BIN=\"$(command -v paper-fetch || true)\"",
       "if [ -z \"$BIN\" ]; then echo \"paper-fetch CLI not found\" >&2; exit 127; fi",
-      "\"$BIN\" fetch --query \"$1\" --format json --output \"$3\" --output-dir \"$2\" --save-markdown --artifact-mode markdown-assets --asset-profile body >\"$4\" 2>\"$5\""
+      "exec 2>\"$5\"",
+      "VERSION=\"$(\"$BIN\" --version)\"; VERSION=\"${VERSION#paper-fetch }\"; MAJOR=\"${VERSION%%.*}\"",
+      "if [[ \"$MAJOR\" == <-> ]] && (( MAJOR >= 8 )); then",
+      "  : >\"$3.receipt-mode\"",
+      // Zotero imports a single file, so keep publisher links in Markdown instead
+      // of local asset links that would break when Zotero copies the attachment.
+      "  exec \"$BIN\" fetch --query \"$1\" --output-dir \"$2\" --artifact-mode \"$6\" --asset-profile none --prefer-cache --overwrite >\"$4\"",
+      "fi",
+      "args=(--artifact-mode \"$6\")",
+      "if [[ \"$6\" == markdown-assets ]]; then args+=(--asset-profile body); fi",
+      "exec \"$BIN\" fetch --query \"$1\" --format json --output \"$3\" --output-dir \"$2\" --save-markdown \"${args[@]}\" >\"$4\""
     ].join("\n");
 
-    // Step 2: Fallback (no provider artifacts/assets), 60s outer timeout.
-    // artifact-mode none does not disable browser-backed providers in 7.x.
-    var fallbackScript = [
-      "set -euo pipefail",
-      "export PATH=\"/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:/usr/bin:/bin:/opt/local/bin:$PATH\"",
-      "BIN=\"/opt/homebrew/bin/paper-fetch\"",
-      "if [ ! -x \"$BIN\" ]; then BIN=\"$(command -v paper-fetch || true)\"; fi",
-      "if [ -z \"$BIN\" ]; then echo \"paper-fetch CLI not found\" >&2; exit 127; fi",
-      "\"$BIN\" fetch --query \"$1\" --format json --output \"$3\" --output-dir \"$2\" --save-markdown --artifact-mode none >\"$4\" 2>\"$5\""
-    ].join("\n");
-
-    return self._runProcess("/bin/zsh", [
-      "-lc", fullScript, "skill-fulltext-zotero",
-      query, outputDir, resultJSON, stdoutLog, stderrLog
-    ], 1080000).then(function () {
-      return self._hasFile(outputDir, [resultJSON]);
-    }).then(function (hasFile) {
-      if (hasFile) return true;
-      throw new Error("\u5B8C\u6574\u6A21\u5F0F\u672A\u751F\u6210\u6587\u4EF6");
-    }).catch(function (fullErr) {
-      if (self.cancelled) throw fullErr;
-      // Fallback: no-artifact mode; provider choice remains upstream-owned.
+    function run(result, stdout, stderr, mode, timeout) {
       return self._runProcess("/bin/zsh", [
-        "-lc", fallbackScript, "skill-fulltext-zotero",
-        query, outputDir, fallbackResultJSON, fallbackStdoutLog, fallbackStderrLog
-      ], 60000).then(function () {
-        return self._hasFile(outputDir, [fallbackResultJSON]);
-      }).then(function (hasFile) {
-        if (hasFile) return true;
-        throw new Error(fullErr.message);
+        "-lc", script, "skill-fulltext-zotero",
+        query, outputDir, result, stdout, stderr, mode
+      ], timeout).then(async function () {
+        var file = await self._paperFetchAttachment(outputDir, result, stdout, query, mode);
+        if (file) return file;
+        throw new Error("paper-fetch 未生成可导入的全文");
       });
-    });
+    }
+
+    // Leave time for first-run browser preparation in the full mode.
+    return run(resultJSON, stdoutLog, stderrLog, "markdown-assets", 1080000)
+      .catch(function (error) {
+        if (self.cancelled) throw error;
+        return run(fallbackResultJSON, fallbackStdoutLog, fallbackStderrLog, "none", 60000);
+      });
+  },
+
+  _paperFetchAttachment: async function (dir, legacyPath, receiptPath, query, mode) {
+    if (!(await IOUtils.exists(legacyPath + ".receipt-mode"))) {
+      return this._pickAttachmentFile(dir, [legacyPath]);
+    }
+
+    // v8 writes a receipt even for abstract-only/failed requests. Never fall
+    // back to scanning arbitrary Markdown or old artifacts in this mode.
+    try {
+      var receipt = JSON.parse(await IOUtils.readUTF8(receiptPath));
+      var acceptance = receipt.acceptance || {};
+      var identity = receipt.identity || {};
+      if (receipt.contract !== "paper-fetch/receipt" || receipt.schema_version !== 2 ||
+          receipt.index !== 1 || receipt.query !== query || receipt.status !== "completed" ||
+          receipt.error || receipt.target_satisfied !== true || receipt.truncated !== false ||
+          receipt.content_kind !== "fulltext" || acceptance.has_fulltext !== true ||
+          acceptance.fetch !== "ok" || (acceptance.target && acceptance.target !== "paper") ||
+          !["complete", "degraded"].includes(acceptance.overall) ||
+          identity.status !== "resolved" || acceptance.identity !== "resolved") return null;
+
+      var expectedDOI = /^10\.\d{4,9}\//.test(query) ? query : identity.expected_doi || "";
+      if (/^10\.\d{4,9}\/\S+$/.test(expectedDOI) &&
+          String(identity.doi || "").toLowerCase() !== expectedDOI.toLowerCase()) return null;
+
+      if (mode === "markdown-assets" && receipt.acquisition?.representation === "pdf") {
+        // The provider saves the original PDF at the root separately from
+        // receipt files. Prefer it only when unique; _one checks PDF identity.
+        var candidates = (await IOUtils.getChildren(dir)).filter(function (file) {
+          return /\.pdf$/i.test(file);
+        });
+        if (candidates.length === 1 && await this._isRegularNonEmpty(candidates[0])) {
+          return candidates[0];
+        }
+      }
+      var bodyPath = receipt.body_path;
+      if (typeof bodyPath !== "string" || !bodyPath.startsWith(dir + "/") ||
+          !/^\.paper-fetch-results\/[0-9a-f-]{36}\/1\/body\.md$/i.test(bodyPath.slice(dir.length + 1))) return null;
+      return await this._isRegularNonEmpty(bodyPath) ? bodyPath : null;
+    } catch (e) {
+      Zotero.debug("Skill Fulltext: invalid Paper-fetch receipt: " + e, 2);
+      return null;
+    }
+  },
+
+  _isRegularNonEmpty: async function (file) {
+    try {
+      var stat = await IOUtils.stat(file);
+      return stat.type === "regular" && stat.size > 0;
+    } catch (e) {
+      return false;
+    }
   },
 
   _findExistingPDFAttachment: async function (item) {
@@ -568,6 +866,14 @@ var SkillFulltextDownloader = {
         if (!text) continue;
         try {
           var payload = JSON.parse(text);
+          if (payload.contract === "paper-fetch/receipt") {
+            var error = payload.error || {};
+            if (error.status === "ambiguous" || payload.identity?.status === "ambiguous") return "标题歧义，请补充 DOI";
+            if (error.reason) return String(error.reason).slice(0, 160);
+            if (payload.content_kind === "metadata_only") return "paper-fetch 仅返回元数据，未获取全文";
+            if (payload.content_kind === "abstract_only") return "paper-fetch 仅返回摘要，未获取全文";
+            continue;
+          }
           if (payload.status === "ambiguous") return "\u6807\u9898\u6B67\u4E49\uFF0C\u8BF7\u8865\u5145 DOI";
           if (payload.reason) return String(payload.reason).slice(0, 160);
           var quality = payload.quality || {};
@@ -581,15 +887,11 @@ var SkillFulltextDownloader = {
           }
           if (quality.content_kind === "metadata_only") return "paper-fetch \u4EC5\u8FD4\u56DE\u5143\u6570\u636E\uFF0C\u672A\u83B7\u53D6\u5168\u6587";
         } catch (e) {
-          return text.slice(0, 160);
+          if (!path.endsWith(".stdout.log")) return text.slice(0, 160);
         }
       } catch (e) {}
     }
     return "";
-  },
-
-  _hasFile: async function (dir, resultPaths) {
-    return !!(await this._pickAttachmentFile(dir, resultPaths));
   },
 
   _runProcess: function (command, args, timeout) {

@@ -5,7 +5,7 @@ import vm from "node:vm";
 function loadPlugin(zotero, extra = {}) {
   const context = {
     Zotero: zotero,
-    Services: { dirsvc: { get: () => ({ path: "/tmp" }) } },
+    Services: { dirsvc: { get: () => ({ path: "/tmp", normalize() {} }) } },
     Ci: { nsIFile: {} },
     Cc: {},
     PathUtils: { join: (...parts) => parts.join("/") },
